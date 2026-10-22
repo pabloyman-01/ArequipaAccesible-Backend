@@ -1,0 +1,24 @@
+@baseUrl = http://localhost:8080
+# Set token in your HTTP client's secret store; never commit a real token.
+@token = REEMPLAZAR_LOCALMENTE
+
+### Public healthcheck
+GET {{baseUrl}}/actuator/health
+
+### Profile creation after Supabase Auth signup/login; fictitious example data
+PUT {{baseUrl}}/api/usuarios/me
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"nombres":"Ejemplo","apellidos":"Prueba","tipoDocumento":"DNI","documento":"00000000"}
+
+### Own profile (masked document)
+GET {{baseUrl}}/api/usuarios/me
+Authorization: Bearer {{token}}
+
+### Patch permitted fields; null/omitted fields remain unchanged
+PATCH {{baseUrl}}/api/usuarios/me
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"telefono":"+51900000000"}

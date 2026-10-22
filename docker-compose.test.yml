@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: accesible_test
+      POSTGRES_USER: accesible_test
+      POSTGRES_PASSWORD: ${TEST_DB_PASSWORD:?Set a local test-only password}
+    ports:
+      - "127.0.0.1:55432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U accesible_test -d accesible_test"]
+      interval: 2s
+      retries: 20

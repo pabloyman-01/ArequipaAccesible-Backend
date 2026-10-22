@@ -1,0 +1,46 @@
+spring:
+  application:
+    name: arequipa-accesible
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.default_schema: accesible
+  flyway:
+    default-schema: accesible
+    schemas: accesible
+    locations: classpath:db/migration
+    clean-disabled: true
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+server:
+  port: ${PORT:8080}
+  forward-headers-strategy: none
+  error:
+    include-message: never
+    include-stacktrace: never
+management:
+  endpoints.web.exposure.include: health
+  endpoint.health.show-details: never
+logging:
+  structured.format.console: ecs
+  level:
+    org.hibernate.engine.jdbc.spi.SqlExceptionHelper: OFF
+    org.hibernate.SQL: OFF
+    org.hibernate.orm.jdbc.bind: OFF
+springdoc:
+  api-docs.enabled: ${OPENAPI_ENABLED:false}
+  swagger-ui.enabled: ${OPENAPI_ENABLED:false}
+app:
+  jwt:
+    issuer: ${SUPABASE_JWT_ISSUER}
+    jwks-uri: ${SUPABASE_JWKS_URI}
+    audience: ${SUPABASE_JWT_AUDIENCE:authenticated}
+  cors-origins: ${CORS_ALLOWED_ORIGINS:}
+  require-https: ${REQUIRE_HTTPS:true}
