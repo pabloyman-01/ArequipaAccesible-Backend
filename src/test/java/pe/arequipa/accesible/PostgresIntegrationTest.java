@@ -234,6 +234,11 @@ class PostgresIntegrationTest {
             return reportes.listarPropios(id,new ConsultaReportes(20,null,null,null,null,null,null,null,null));
         });
         assertThat(listed).extracting(ResumenReporte::id).containsExactly(created.id());
+        var history=tx.execute(status -> {
+            jdbc.execute("SET LOCAL ROLE accesible_runtime_test");
+            return reportes.historial(created.id(),id,false).orElseThrow();
+        });
+        assertThat(history).extracting(CambioEstadoReporte::estadoNuevo).containsExactly("RECIBIDO");
         // Lost COMMIT acknowledgement must not delete an already committed evidence object.
         reportes.limpiarCarga(pending,true,storage::eliminar);
         verify(storage,never()).eliminar(anyString());
@@ -374,6 +379,95 @@ class PostgresIntegrationTest {
         return json.readTree(response).get("id").asLong();
     }
     int count(String table) { return jdbc.queryForObject("SELECT count(*) FROM accesible."+table,Integer.class); }
+    long eventoHistorial(long reporte, String anterior, String nuevo, String motivo, String fecha) {
+        return jdbc.queryForObject("""
+            INSERT INTO accesible.historial_estados(reporte_id,estado_anterior,estado_nuevo,motivo,actor_id,fecha_cambio)
+            VALUES (?,?,?,?,?,?::timestamptz) RETURNING id
+            """,Long.class,reporte,anterior,nuevo,motivo,id,fecha);
+    }
+    @Test void ownerCanReadInitialHistoryWithoutPrivateActorOrPhotoData() throws Exception {
+        prepararReporte();long report=crearReporte();
+        mvc.perform(get("/api/reportes/"+report+"/historial").header("Authorization",bearer()))
+                .andExpect(status().isOk()).andExpect(header().string("Cache-Control","no-store"))
+                .andExpect(jsonPath("$.length()").value(1)).andExpect(jsonPath("$[0].estadoAnterior").isEmpty())
+                .andExpect(jsonPath("$[0].estadoNuevo").value("RECIBIDO"))
+                .andExpect(jsonPath("$[0].motivo").isEmpty()).andExpect(jsonPath("$[0].fechaCambio").exists())
+                .andExpect(jsonPath("$[0].actorId").doesNotExist()).andExpect(jsonPath("$[0].reporteId").doesNotExist());
+        verify(storage,never()).descargar(anyString());
+    }
+    @Test void historyIsChronologicalAndTiesUseEventId() throws Exception {
+        prepararReporte();long report=filaListado(id,1,"2026-10-23T05:00:00Z","ATENDIDO","ALTA",1,1);
+        long middle=eventoHistorial(report,"RECIBIDO","EN_EVALUACION","Revisión técnica de prueba","2026-10-23T06:00:00.123456Z");
+        long first=eventoHistorial(report,null,"RECIBIDO",null,"2026-10-23T05:00:00Z");
+        long last=eventoHistorial(report,"EN_EVALUACION","ATENDIDO","Cierre técnico de prueba","2026-10-23T06:00:00.123456Z");
+        long other=filaListado(otroCiudadano(),2,"2026-10-23T05:00:00Z","RECIBIDO","ALTA",1,1);
+        eventoHistorial(other,null,"RECIBIDO","No debe aparecer","2026-10-23T05:00:00Z");
+        var result=mvc.perform(get("/api/reportes/"+report+"/historial").header("Authorization",bearer()))
+                .andExpect(status().isOk()).andReturn();
+        var events=json.readTree(result.getResponse().getContentAsString());
+        assertThat(events.size()).isEqualTo(3);
+        assertThat(events.get(0).get("id").asLong()).isEqualTo(first);
+        assertThat(events.get(1).get("id").asLong()).isEqualTo(middle);
+        assertThat(events.get(2).get("id").asLong()).isEqualTo(last);
+        assertThat(events.get(1).get("estadoAnterior").asText()).isEqualTo("RECIBIDO");
+        assertThat(events.get(1).get("fechaCambio").asText()).isEqualTo("2026-10-23T06:00:00.123456Z");
+        assertThat(events.get(2).get("motivo").asText()).isEqualTo("Cierre técnico de prueba");
+        assertThat(events.toString()).doesNotContain("actorId","actor_id",id.toString(),"objectKey","No debe aparecer");
+        verifyNoInteractions(storage);
+    }
+    @Test void existingReportWithoutHistoryReturnsEmptyArray() throws Exception {
+        prepararReporte();long report=filaListado(id,1,"2026-10-23T05:00:00Z","RECIBIDO","ALTA",1,1);
+        mvc.perform(get("/api/reportes/"+report+"/historial").header("Authorization",bearer()))
+                .andExpect(status().isOk()).andExpect(content().json("[]"));
+    }
+    @Test void foreignAndMissingHistoryReturnTheSameNotFoundError() throws Exception {
+        prepararReporte();long report=filaListado(otroCiudadano(),1,"2026-10-23T05:00:00Z","RECIBIDO","ALTA",1,1);
+        eventoHistorial(report,null,"RECIBIDO",null,"2026-10-23T05:00:00Z");
+        for(String path:List.of("/api/reportes/"+report+"/historial?administrador=true&ciudadanoId="+id,"/api/reportes/999999/historial")) {
+            mvc.perform(get(path).header("Authorization",bearer())).andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.code").value("NO_ENCONTRADO"))
+                    .andExpect(jsonPath("$.message").value("Recurso no encontrado"));
+        }
+        verifyNoInteractions(storage);
+    }
+    @Test void administratorCanReadForeignHistoryAndRoleRevocationAppliesImmediately() throws Exception {
+        prepararReporte();long report=filaListado(id,1,"2026-10-23T05:00:00Z","RECIBIDO","ALTA",1,1);
+        eventoHistorial(report,null,"RECIBIDO",null,"2026-10-23T05:00:00Z");
+        UUID admin=otroCiudadano();
+        jdbc.update("DELETE FROM accesible.usuario_roles WHERE usuario_id=?",admin);
+        jdbc.update("INSERT INTO accesible.usuario_roles SELECT ?,id FROM accesible.roles WHERE codigo='ADMINISTRADOR'",admin);
+        mvc.perform(get("/api/reportes/"+report+"/historial").header("Authorization","Bearer "+admin))
+                .andExpect(status().isOk()).andExpect(jsonPath("$[0].estadoNuevo").value("RECIBIDO"));
+        jdbc.update("DELETE FROM accesible.usuario_roles WHERE usuario_id=?",admin);
+        jdbc.update("INSERT INTO accesible.usuario_roles SELECT ?,id FROM accesible.roles WHERE codigo='CIUDADANO'",admin);
+        mvc.perform(get("/api/reportes/"+report+"/historial").header("Authorization","Bearer "+admin))
+                .andExpect(status().isNotFound());
+        verifyNoInteractions(storage);
+    }
+    @Test void historyRequiresAuthenticationAndActiveProfile() throws Exception {
+        mvc.perform(get("/api/reportes/1/historial")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/reportes/1/historial").header("Authorization",bearer())).andExpect(status().isForbidden());
+        prepararReporte();long report=filaListado(id,1,"2026-10-23T05:00:00Z","RECIBIDO","ALTA",1,1);
+        jdbc.update("UPDATE accesible.usuarios SET estado_cuenta='SUSPENDIDA' WHERE id=?",id);
+        mvc.perform(get("/api/reportes/"+report+"/historial").header("Authorization",bearer())).andExpect(status().isForbidden());
+        UUID admin=otroCiudadano();
+        jdbc.update("INSERT INTO accesible.usuario_roles SELECT ?,id FROM accesible.roles WHERE codigo='ADMINISTRADOR'",admin);
+        jdbc.update("UPDATE accesible.usuarios SET estado_cuenta='SUSPENDIDA' WHERE id=?",admin);
+        mvc.perform(get("/api/reportes/"+report+"/historial").header("Authorization","Bearer "+admin)).andExpect(status().isForbidden());
+    }
+    @Test void historyIdentifiersAndUnsupportedMutationsAreHandledWithoutWrites() throws Exception {
+        prepararReporte();long report=filaListado(id,1,"2026-10-23T05:00:00Z","RECIBIDO","ALTA",1,1);
+        for(String value:List.of("abc","9223372036854775808")) {
+            mvc.perform(get("/api/reportes/"+value+"/historial").header("Authorization",bearer())).andExpect(status().isBadRequest());
+        }
+        for(String value:List.of("0","-1")) {
+            mvc.perform(get("/api/reportes/"+value+"/historial").header("Authorization",bearer())).andExpect(status().isNotFound());
+        }
+        mvc.perform(post("/api/reportes/"+report+"/historial").header("Authorization",bearer())).andExpect(status().isMethodNotAllowed());
+        mvc.perform(patch("/api/reportes/"+report+"/historial").header("Authorization",bearer())).andExpect(status().isMethodNotAllowed());
+        assertThat(count("historial_estados")).isZero();
+        verifyNoInteractions(storage);
+    }
     @Test void reportCreatedWithEvidenceHistoryAuditAndPrivateDetail() throws Exception {
         prepararReporte(); long reportId=crearReporte();
         assertThat(count("reportes")).isEqualTo(1); assertThat(count("reporte_fotos")).isEqualTo(1);

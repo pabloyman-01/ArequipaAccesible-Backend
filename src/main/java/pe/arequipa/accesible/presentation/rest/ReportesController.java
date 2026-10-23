@@ -103,4 +103,9 @@ public class ReportesController {
                 .cacheControl(CacheControl.noStore()).header("Content-Disposition","inline; filename=\"evidencia."+(f.mimeType().equals("image/png")?"png":"jpg")+"\"")
                 .body(f.contenido());
     }
+    @GetMapping("/{id}/historial")
+    public ResponseEntity<List<CambioEstadoReporte>> historial(@PathVariable long id, @AuthenticationPrincipal Jwt jwt) {
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore())
+                .body(reportes.historial(id,UUID.fromString(jwt.getSubject())));
+    }
 }

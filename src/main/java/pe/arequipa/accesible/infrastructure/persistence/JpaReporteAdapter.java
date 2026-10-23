@@ -95,6 +95,23 @@ public class JpaReporteAdapter implements ReporteRepositoryPort {
                 r.descripcion,r.direccion,r.latitud,r.longitud,r.estado,r.creado,fotos);
     }
     @Override @Transactional(readOnly=true)
+    public Optional<List<CambioEstadoReporte>> historial(long id, UUID actor, boolean admin) {
+        // Distinguish an authorized report with no history from a missing/foreign report.
+        // Do not call buscar: history does not need photo metadata or Storage.
+        var autorizado=em.createQuery("SELECT r.id FROM ReporteEntity r WHERE r.id=:id AND (r.ciudadanoId=:actor OR :admin=true)",Long.class)
+                .setParameter("id",id).setParameter("actor",actor).setParameter("admin",admin).getResultList();
+        if (autorizado.isEmpty()) return Optional.empty();
+        var cambios=em.createQuery("""
+            SELECT new pe.arequipa.accesible.domain.model.CambioEstadoReporte(
+                h.id,h.estadoAnterior,h.estadoNuevo,h.fechaCambio,h.motivo)
+            FROM HistorialEstadoEntity h, ReporteEntity r
+            WHERE h.reporteId=r.id AND r.id=:id AND (r.ciudadanoId=:actor OR :admin=true)
+            ORDER BY h.fechaCambio ASC,h.id ASC
+            """,CambioEstadoReporte.class)
+                .setParameter("id",id).setParameter("actor",actor).setParameter("admin",admin).getResultList();
+        return Optional.of(cambios);
+    }
+    @Override @Transactional(readOnly=true)
     public List<ResumenReporte> listarPropios(UUID actor, ConsultaReportes filtro) {
         // Owner is mandatory for all callers, including citizens with an admin role.
         StringBuilder where=new StringBuilder(" WHERE r.ciudadanoId=:actor");

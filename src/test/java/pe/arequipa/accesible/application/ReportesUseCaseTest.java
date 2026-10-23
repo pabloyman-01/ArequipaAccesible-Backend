@@ -32,6 +32,27 @@ class ReportesUseCaseTest {
         citizen(); when(images.validar(any(),any())).thenReturn(new ImagenValidada(new byte[]{1},"image/png","png"));
         when(repo.reservarCarga(eq(id),anyString(),eq(5))).thenReturn(pending);
     }
+    @Test void historyWorksWithoutUploadsAndDoesNotLoadReportPhotos() {
+        citizen();
+        var event=new CambioEstadoReporte(1,null,"RECIBIDO",Instant.now(),null);
+        when(repo.historial(1,id,false)).thenReturn(Optional.of(List.of(event)));
+        var disabled=new ReportesUseCase(usuarios,repo,storage,images,new AreaPermitida(null,null,null,null),Clock.systemUTC(),false,5);
+        assertThat(disabled.historial(1,id)).containsExactly(event);
+        verify(repo,never()).buscar(anyLong(),any(),anyBoolean());
+        verifyNoInteractions(storage,images);
+    }
+    @Test void inaccessibleHistoryIsNotFound() {
+        citizen();when(repo.historial(1,id,false)).thenReturn(Optional.empty());
+        assertThatThrownBy(()->service.historial(1,id)).isInstanceOfSatisfying(ReporteException.class,
+                e->assertThat(e.motivo()).isEqualTo(ReporteException.Motivo.NO_ENCONTRADO));
+        verifyNoInteractions(storage,images);
+    }
+    @Test void suspendedActorCannotConsultHistoryThroughApplicationLayer() {
+        when(usuarios.buscar(id)).thenReturn(Optional.of(new UsuarioPerfil(id,"Ana","Test","DNI","00000000","test@example.test",null,null,"SUSPENDIDA","NO_VERIFICADO",Instant.now(),Set.of(Rol.ADMINISTRADOR))));
+        assertThatThrownBy(()->service.historial(1,id)).isInstanceOfSatisfying(ReporteException.class,
+                e->assertThat(e.motivo()).isEqualTo(ReporteException.Motivo.SIN_PERMISO));
+        verifyNoInteractions(repo,storage,images);
+    }
     @Test void listWorksWhenNewUploadsAreDisabled() {
         citizen();var query=new ConsultaReportes(20,null,null,null,null,null,null,null,null);
         var disabled=new ReportesUseCase(usuarios,repo,storage,images,new AreaPermitida(null,null,null,null),Clock.systemUTC(),false,5);

@@ -55,6 +55,11 @@ public class ReportesUseCase {
         return reportes.buscar(id,actorId,actor.roles().contains(Rol.ADMINISTRADOR))
                 .orElseThrow(() -> new ReporteException(NO_ENCONTRADO));
     }
+    public List<CambioEstadoReporte> historial(long id, UUID actorId) {
+        var actor=actor(actorId);
+        return List.copyOf(reportes.historial(id,actorId,actor.roles().contains(Rol.ADMINISTRADOR))
+                .orElseThrow(() -> new ReporteException(NO_ENCONTRADO)));
+    }
     public record Pagina(List<ResumenReporte> elementos, int limite, boolean hayMas, ConsultaReportes.Cursor siguiente) {
         public Pagina { elementos=List.copyOf(elementos); }
     }

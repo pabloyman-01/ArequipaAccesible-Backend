@@ -10,6 +10,7 @@ public interface ReporteRepositoryPort {
     UUID reservarCarga(UUID actor, String objectKey, int limitePorMinuto);
     Reporte crear(CrearReporte datos, UUID actor, UUID carga, ImagenValidada imagen, Instant fecha);
     Optional<Reporte> buscar(long id, UUID actor, boolean administrador);
+    Optional<List<CambioEstadoReporte>> historial(long id, UUID actor, boolean administrador);
     List<ResumenReporte> listarPropios(UUID actor, ConsultaReportes consulta);
     void limpiarCarga(UUID carga, boolean inmediata, Consumer<String> eliminar);
     List<UUID> cargasVencidas();

@@ -12,7 +12,7 @@ Java 21, Spring Boot 3.5.16, Maven Wrapper 3.9.11 y PostgreSQL 17. Implementa **
 - Provisión administrativa mediante operación de BD, con auditoría y atomicidad.
 - Esquema privado `accesible`, RLS y sin acceso al Data API. Migraciones V1 (identidad/catálogos/auditoría) y V2 (vinculación Auth).
 
-HU-01 añade registro y detalle de reportes, fotos privadas, historial inicial, auditoría, catálogos públicos activos y recuperación de archivos huérfanos. La continuación incorpora el listado paginado de reportes propios con filtros. Quedan pendientes cambios de estado, administración HTTP, KPI, IA y cuadrillas. El piloto usa catálogos internos aprobados mediante V4; las pruebas usan catálogos explícitamente ficticios.
+HU-01 añade registro y detalle de reportes, fotos privadas, historial inicial, auditoría, catálogos públicos activos y recuperación de archivos huérfanos. La continuación incorpora el listado paginado de reportes propios con filtros y la consulta del historial por propietario o administrador. Quedan pendientes cambios de estado, administración HTTP, KPI, IA y cuadrillas. El piloto usa catálogos internos aprobados mediante V4; las pruebas usan catálogos explícitamente ficticios.
 
 Proyecto Supabase creado por autorización del usuario: [ArequipaAccesible-Backend](https://supabase.com/dashboard/project/kjqzklzswocxbtbqohsc), São Paulo. Se provisionaron 12 tablas privadas, FK de identidad, bucket privado y rol `arequipa_backend` con RLS. Sus credenciales no están en el repositorio. Ver la adopción de Flyway y configuración de HU-01 al final.
 
@@ -203,6 +203,14 @@ Respuesta 200: `{elementos: [...], limite: 20, hayMas: false, siguienteCursor: n
 
 La consulta usa parámetros vinculados, propietario obligatorio y orden `fecha_creacion DESC, id DESC`. Solicita como máximo `limite + 1` filas, sin OFFSET, COUNT global ni consultas de fotos por reporte. Reutiliza el índice existente `(ciudadano_id, fecha_creacion DESC)`; no requiere migraciones ni nuevos permisos. El cursor representa una posición y no concede permisos. La paginación evita repetir resultados cuando se insertan nuevos reportes más recientes, pero no constituye una instantánea histórica entre peticiones: cambios de estado o de filtros pueden cambiar las coincidencias. Al cambiar filtros, comenzar sin cursor.
 
-Siguiente iteración: historial consultable; luego administración/transiciones. La lectura segura de la evidencia se incluyó junto a HU-01 para cerrar el ciclo mínimo del reporte.
+### Historial de un reporte
+
+`GET /api/reportes/{id}/historial` requiere un perfil activo. El propietario o un ADMINISTRADOR puede consultarlo; otro ciudadano recibe el mismo 404 que un reporte inexistente. Los roles y el estado de la cuenta se consultan en la base en cada petición, por lo que revocar el rol administrativo o suspender la cuenta afecta al siguiente acceso.
+
+Devuelve un arreglo con `id`, `estadoAnterior`, `estadoNuevo`, `fechaCambio` y `motivo`, ordenado por `fechaCambio ASC, id ASC`. Las fechas son instantes ISO en UTC. En el evento inicial RECIBIDO, estadoAnterior y motivo pueden ser null. Un reporte existente sin eventos devuelve 200 con `[]`. La respuesta lleva `Cache-Control: no-store` y no expone UUID, nombres ni documento del actor, datos de auditoría o claves de fotos.
+
+Se reutilizan la tabla `historial_estados`, el índice por reporte/fecha y los permisos SELECT existentes. La autorización se verifica antes de consultar los eventos y también se aplica en su consulta. No se consultan fotos ni Storage y no se requiere migración. El historial permanece disponible si se deshabilitan nuevas cargas. Este endpoint es de lectura: las transiciones y la escritura de motivos se implementarán en el bloque administrativo; las pruebas de varios estados usan fixtures exclusivamente en la base desechable.
+
+Siguiente iteración: administración y transiciones de estado. La lectura segura de la evidencia se incluyó junto a HU-01 para cerrar el ciclo mínimo del reporte.
 
 Referencias: [JWT Supabase](https://supabase.com/docs/guides/auth/jwts), [Resource Server Spring Security 6.5](https://docs.spring.io/spring-security/reference/6.5/servlet/oauth2/resource-server/jwt.html). El [cambio TLS de Supabase](https://supabase.com/changelog/cbc-tls-ciphers-deprecated) requiere clientes modernos; se usa HTTPS de Java 21.

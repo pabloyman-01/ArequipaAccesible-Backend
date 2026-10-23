@@ -65,3 +65,7 @@ Authorization: Bearer {{token}}
 ### Private evidence: use the link from detail
 GET {{baseUrl}}/api/reportes/1/fotos/1
 Authorization: Bearer {{token}}
+
+### Chronological report history: owner or administrator; same 404 for foreign/missing reports
+GET {{baseUrl}}/api/reportes/1/historial
+Authorization: Bearer {{token}}
