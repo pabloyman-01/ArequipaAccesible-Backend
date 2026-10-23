@@ -7,9 +7,9 @@
   "runtimeRole": "arequipa_backend",
   "privateBucket": "reportes-evidencias",
   "connectorBootstrapApplied": true,
-  "flywayBaselineRequired": 3,
-  "credentialsConfigured": false,
-  "geographicAreaApproved": false,
+  "flywayBaselineRequired": null,
+  "credentialsConfigured": true,
+  "geographicAreaApproved": true,
   "officialCataloguesSeeded": false,
   "migrations": [
     {
@@ -23,6 +23,16 @@
     {
       "file": "src/main/resources/db/migration/V3__hu01_reportes.sql",
       "sha256": "ac0bcf3947352f976c9a7c97be32faf1e2c8410627e002df45880e3bcac8c53a"
+    },
+    {
+      "file": "src/main/resources/db/migration/V4__catalogo_piloto_aprobado.sql",
+      "sha256": "84ae76eedb6e4543da6f5aa6d1f3af2feef30c2b88a062671aca51a3d819bdd6"
     }
-  ]
+  ],
+  "flywayBaselineApplied": 3,
+  "flywayCurrentVersion": 4,
+  "internalPilotCataloguesSeeded": true,
+  "runtimeJdbcVerified": true,
+  "runtimeTlsMode": "verify-full",
+  "temporaryMigrationRoleRemoved": true
 }

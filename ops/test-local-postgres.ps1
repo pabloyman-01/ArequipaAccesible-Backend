@@ -28,7 +28,7 @@ try {
             & "$PgBin\createdb.exe" -h 127.0.0.1 -p $Port -U codex_test bootstrap_test
             if ($LASTEXITCODE -ne 0) { throw 'Bootstrap database creation failed' }
             $bootstrapSql = "BEGIN;`nCREATE SCHEMA accesible;`nSET LOCAL search_path=accesible,pg_catalog;`n"
-            foreach ($migration in (Get-ChildItem -LiteralPath 'src/main/resources/db/migration' -Filter 'V*.sql' | Sort-Object Name)) {
+            foreach ($migration in (Get-ChildItem -LiteralPath 'src/main/resources/db/migration' -Filter 'V*.sql' | Where-Object { $_.Name -match '^V[1-3]__' } | Sort-Object Name)) {
                 $bootstrapSql += [IO.File]::ReadAllText($migration.FullName) + "`n"
             }
             $bootstrapSql += "COMMIT;`n"
@@ -41,7 +41,7 @@ try {
             $env:MIGRATION_DB_PASSWORD = ''
             & .\mvnw.cmd -B flyway:baseline '-Dflyway.baselineVersion=3'
             if ($LASTEXITCODE -ne 0) { throw 'Bootstrap baseline failed' }
-            & .\mvnw.cmd -B flyway:validate flyway:migrate
+            & .\mvnw.cmd -B flyway:migrate flyway:validate
             if ($LASTEXITCODE -ne 0) { throw 'Bootstrap adoption failed' }
         }
         & .\mvnw.cmd -B verify

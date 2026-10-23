@@ -145,15 +145,26 @@ El worker revisa cada minuto hasta 20 intenciones vencidas (30 minutos de margen
 
 ```sh
 ./mvnw flyway:baseline -Dflyway.baselineVersion=3
-./mvnw flyway:validate flyway:migrate
+./mvnw flyway:migrate flyway:validate
 ```
 
-No usar baseline para una base vacía ni para ocultar diferencias. Bases nuevas ajenas al proyecto conectado ejecutan simplemente flyway:migrate, que aplica V1..V3. El script local con `-CheckBootstrap` verifica ambas vías en bases desechables. No se modificó manualmente `flyway_schema_history`. Después de la adopción, nuevas versiones se gestionan exclusivamente con Flyway para mantener una sola autoridad de migraciones de aplicación. El bucket se configura aparte mediante `ops/supabase-private-bucket.sql` (Supabase únicamente).
+No usar baseline para una base vacía ni para ocultar diferencias. Bases nuevas ajenas al proyecto conectado ejecutan simplemente flyway:migrate, que aplica V1..V4. El script local con `-CheckBootstrap` verifica ambas vías en bases desechables. No se modificó manualmente `flyway_schema_history`. Después de la adopción, nuevas versiones se gestionan exclusivamente con Flyway para mantener una sola autoridad de migraciones de aplicación. El bucket se configura aparte mediante `ops/supabase-private-bucket.sql` (Supabase únicamente).
 
 3. Cargar catálogos aprobados por operación/migración revisada; no hay semillas oficiales inventadas. Definir REPORTES_LAT_MIN/MAX y REPORTES_LON_MIN/MAX según el área aprobada. Sin esos datos no se habilita el registro.
 4. `REPORTES_HABILITADO=true` habilita el adaptador real y exige URL HTTPS, clave y área válida al arrancar. Por defecto false: POST devuelve 503, preservando identidad y salud operativas. No existe un Storage falso en producción.
 
-Supabase está provisionado, pero no se afirma un arranque remoto del backend, login real ni carga de foto real hasta suministrar esas credenciales/configuración. `SUPABASE_STORAGE_SECRET_KEY` nunca va al cliente. Bucket `reportes-evidencias` privado con límite 5242880 bytes y MIME JPEG/PNG; sin políticas de acceso directo anon/authenticated. Seguridad revisada con Supabase advisors sin avisos tras configurar runtime. Avisos informativos de índices sin uso son esperables en una base vacía.
+La activación local ya usa JDBC real con `sslmode=verify-full` y el certificado CA oficial de Supabase. El backend arranca con el rol runtime restringido, sin Flyway en ejecución. El baseline 3 y la migración V4 se aplicaron y validaron mediante JDBC; el rol temporal de migración se eliminó después. `SUPABASE_STORAGE_SECRET_KEY` nunca va al cliente. Bucket `reportes-evidencias` privado con límite 5242880 bytes y MIME JPEG/PNG; sin políticas de acceso directo anon/authenticated. El reporte y la foto con una sesión real siguen pendientes; véase `VALIDACION_ACTIVACION.md`.
+
+V4 carga el piloto aprobado: Arequipa (Cercado) y seis categorías internas `PROY-01` a `PROY-06`. El área operativa aprobada es latitud -16.43 a -16.36 y longitud -71.57 a -71.50; no constituye un límite municipal oficial. `.env.local` y `.local/` están excluidos de Git.
+
+En este equipo, cargar las variables sin imprimir secretos y arrancar:
+
+```powershell
+. .\ops\load-local-env.ps1
+.\mvnw.cmd -B spring-boot:run
+```
+
+Para confirmar una sesión real por correo, definir localmente `ACTIVATION_EMAIL` y `SUPABASE_PUBLISHABLE_KEY` y ejecutar `node ops/activation-auth.mjs`. Requiere el redirect local permitido en Supabase. El enlace debe abrirse en el mismo equipo; el callback conserva únicamente la sesión en `.local/auth-session.json`, sin imprimir tokens. Cada arranque solicita un correo y está sujeto a los límites de Auth: no reiniciarlo repetidamente. Detener el proceso y eliminar la sesión local al terminar la prueba.
 
 Pruebas adicionales: use case/compensación, firmas/decode de imagen, API HTTP de Storage contra servidor de prueba, límites de respuesta/red, integración real de transacciones, IDOR, códigos concurrentes, limpieza diferida y flujo completo con rol runtime restringido. No se guardaron usuarios/reportes ficticios en la base real.
 

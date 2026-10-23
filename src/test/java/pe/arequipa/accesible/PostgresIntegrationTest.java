@@ -101,7 +101,7 @@ class PostgresIntegrationTest {
     UsuarioPerfil registrar() { return perfiles.registrar(id,id+"@example.test",new DatosPerfil("Ana","Perez","DNI","12345678",null,null)); }
     @Test void migrationsValidAndAuthFkPresent() {
         flyway.validate();
-        assertThat(Arrays.stream(flyway.info().applied()).filter(m -> m.getVersion() != null)).hasSize(3);
+        assertThat(Arrays.stream(flyway.info().applied()).filter(m -> m.getVersion() != null)).hasSize(4);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM pg_constraint WHERE conname='usuarios_auth_fk'",Integer.class)).isEqualTo(1);
     }
     @Test void healthIsPublic() throws Exception {
