@@ -1,0 +1,28 @@
+{
+  "projectId": "kjqzklzswocxbtbqohsc",
+  "name": "ArequipaAccesible-Backend",
+  "region": "sa-east-1",
+  "url": "https://kjqzklzswocxbtbqohsc.supabase.co",
+  "schema": "accesible",
+  "runtimeRole": "arequipa_backend",
+  "privateBucket": "reportes-evidencias",
+  "connectorBootstrapApplied": true,
+  "flywayBaselineRequired": 3,
+  "credentialsConfigured": false,
+  "geographicAreaApproved": false,
+  "officialCataloguesSeeded": false,
+  "migrations": [
+    {
+      "file": "src/main/resources/db/migration/V1__identidad.sql",
+      "sha256": "d119882b5d8e413a9fbb6061e9b27257c1f1f329b705622458080826e27ed678"
+    },
+    {
+      "file": "src/main/resources/db/migration/V2__supabase_identity_link.sql",
+      "sha256": "dfc57dd089645d07ba69d253f805a4827e830c253c6c920bac18c709517277e5"
+    },
+    {
+      "file": "src/main/resources/db/migration/V3__hu01_reportes.sql",
+      "sha256": "ac0bcf3947352f976c9a7c97be32faf1e2c8410627e002df45880e3bcac8c53a"
+    }
+  ]
+}

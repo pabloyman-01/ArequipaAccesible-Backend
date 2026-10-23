@@ -12,10 +12,34 @@ import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.security.access.AccessDeniedException;
 import pe.arequipa.accesible.domain.model.PerfilException;
+import pe.arequipa.accesible.domain.model.ReporteException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
+import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
     private static final Logger LOG = LoggerFactory.getLogger(ApiExceptionHandler.class);
+    @ExceptionHandler(ReporteException.class)
+    ResponseEntity<ApiError> reporte(ReporteException e) {
+        return switch(e.motivo()) {
+            case INVALIDO -> error(422,"REPORTE_INVALIDO","Revise los datos, catálogos activos y área permitida");
+            case FOTO_GRANDE -> error(413,"FOTO_DEMASIADO_GRANDE","La imagen supera 5 MiB");
+            case FOTO_INVALIDA -> error(415,"FOTO_INVALIDA","Se requiere una imagen JPEG o PNG válida y MIME coincidente");
+            case SIN_PERMISO -> error(403,"ACCESO_DENEGADO","Se requiere un perfil activo con permisos");
+            case NO_ENCONTRADO -> error(404,"NO_ENCONTRADO","Recurso no encontrado");
+            case NO_CONFIGURADO -> error(503,"REPORTES_NO_CONFIGURADO","Registro de reportes pendiente de configuración");
+            case STORAGE_NO_DISPONIBLE -> error(503,"STORAGE_NO_DISPONIBLE","Almacenamiento temporalmente no disponible");
+            case LIMITE_EXCEDIDO -> ResponseEntity.status(429).header("Retry-After","60")
+                    .body(ApiError.of(429,"LIMITE_EXCEDIDO","Límite de reportes por minuto alcanzado"));
+            case CONFLICTO -> error(409,"REPORTE_CONFLICTO","No se pudo confirmar el reporte");
+        };
+    }
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    ResponseEntity<ApiError> grande() { return error(413,"FOTO_DEMASIADO_GRANDE","La imagen supera 5 MiB o la petición supera 6 MiB"); }
+    @ExceptionHandler({MissingServletRequestPartException.class,MultipartException.class,MethodArgumentTypeMismatchException.class})
+    ResponseEntity<ApiError> multipart() { return error(400,"PETICION_INVALIDA","Revise partes multipart e identificadores"); }
     @ExceptionHandler(PerfilException.class)
     ResponseEntity<ApiError> perfil(PerfilException e) {
         return switch(e.motivo()) {
@@ -33,7 +57,11 @@ public class ApiExceptionHandler {
     @ExceptionHandler(HttpMessageNotReadableException.class)
     ResponseEntity<ApiError> json() { return error(400,"JSON_INVALIDO","JSON incorrecto o campos no permitidos"); }
     @ExceptionHandler(DataIntegrityViolationException.class)
-    ResponseEntity<ApiError> conflicto() { return error(409,"PERFIL_CONFLICTO","Los datos del perfil presentan un conflicto"); }
+    ResponseEntity<ApiError> conflicto(jakarta.servlet.http.HttpServletRequest request) {
+        return request.getRequestURI().startsWith("/api/reportes")
+                ? error(409,"REPORTE_CONFLICTO","No se pudo confirmar el reporte")
+                : error(409,"PERFIL_CONFLICTO","Los datos del perfil presentan un conflicto");
+    }
     @ExceptionHandler(AccessDeniedException.class)
     ResponseEntity<ApiError> denegado() { return error(403,"ACCESO_DENEGADO","Permisos insuficientes"); }
     @ExceptionHandler(NoResourceFoundException.class)

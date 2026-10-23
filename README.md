@@ -1,6 +1,6 @@
 # ArequipaAccesible-Backend
 
-Java 21, Spring Boot 3.5.16, Maven Wrapper 3.9.11 y PostgreSQL 17. Implementa **solo iteraciones 0 y 1** de la guía técnica del 22/10/2026. El repositorio original contenía únicamente este README; se conserva el nombre y remoto.
+Java 21, Spring Boot 3.5.16, Maven Wrapper 3.9.11 y PostgreSQL 17. Implementa **iteraciones 0, 1 y 2 (HU-01)** de la guía técnica del 22/10/2026. Reutiliza la base de identidad existente. Ramas: `feat/iteraciones-0-1` y `feat/hu-01`.
 
 ## Implementado
 
@@ -12,7 +12,9 @@ Java 21, Spring Boot 3.5.16, Maven Wrapper 3.9.11 y PostgreSQL 17. Implementa **
 - Provisión administrativa mediante operación de BD, con auditoría y atomicidad.
 - Esquema privado `accesible`, RLS y sin acceso al Data API. Migraciones V1 (identidad/catálogos/auditoría) y V2 (vinculación Auth).
 
-No se incluyen reportes, fotos/Storage, historial, administración HTTP, KPI, IA ni cuadrillas. Sus tablas y casos de uso se incorporarán con HU-01 y las iteraciones siguientes. Catálogos vacíos hasta recibir datos aprobados; solo se siembran CIUDADANO y ADMINISTRADOR. No se han creado buckets ni conectado un proyecto Supabase real.
+HU-01 añade registro y detalle de reportes, fotos privadas, historial inicial, auditoría, catálogos públicos activos y recuperación de archivos huérfanos. No se incluyen listados paginados, cambios de estado, administración HTTP, KPI, IA ni cuadrillas. Catálogos vacíos hasta recibir datos aprobados; solo se siembran CIUDADANO y ADMINISTRADOR. Las pruebas usan catálogos explícitamente ficticios.
+
+Proyecto Supabase creado por autorización del usuario: [ArequipaAccesible-Backend](https://supabase.com/dashboard/project/kjqzklzswocxbtbqohsc), São Paulo. Se provisionaron 12 tablas privadas, FK de identidad, bucket privado y rol `arequipa_backend` con RLS. Sus credenciales no están en el repositorio. Ver la adopción de Flyway y configuración de HU-01 al final.
 
 ## Estructura
 
@@ -45,7 +47,7 @@ Requisitos: JDK 21, PostgreSQL 17 o proyecto Supabase real y Maven Central acces
 ./mvnw spring-boot:run
 ```
 
-No se requiere service_role key, anon key ni Storage en estas iteraciones. Registro, confirmación de correo, login, recuperación y logout corresponden al cliente y Supabase Auth, no a endpoints nuevos del backend.
+Identidad no requiere claves de Storage. HU-01 necesita una secret key **solo de servidor** para el adaptador HTTP; preferir `sb_secret_...` (header apikey), con compatibilidad para service_role JWT legacy (apikey + Bearer). Nunca reenviar el JWT del ciudadano como credencial de Storage. Registro, confirmación de correo, login, recuperación y logout corresponden al cliente y Supabase Auth.
 
 ### Producción: migraciones y rol de ejecución separado
 
@@ -64,7 +66,7 @@ Crear por operación de BD un rol LOGIN dedicado, sin SUPERUSER/BYPASSRLS, sin m
 psql -v runtime_role=ROL_RUNTIME_REAL -f ops/configure-runtime-role.sql
 ```
 
-El script concede solo operaciones de identidad necesarias con políticas RLS del backend confiable. El runtime no puede conceder ADMINISTRADOR ni cambiar estado/documento/email por SQL. No exponer `accesible` en Data API ni conceder permisos a anon/authenticated. Configurar `DB_USERNAME`/`DB_PASSWORD` con el rol runtime y `SPRING_FLYWAY_ENABLED=false`; quitar credenciales de migración del proceso. Desarrollo/pruebas con propietario mantienen Flyway habilitado.
+El script concede solo operaciones de identidad/HU-01 necesarias con políticas RLS del backend confiable. El runtime no puede conceder ADMINISTRADOR, cambiar estado/documento/email ni actualizar/eliminar reportes por SQL. No exponer `accesible` en Data API ni conceder permisos a anon/authenticated. Configurar `DB_USERNAME`/`DB_PASSWORD` con el rol runtime y `SPRING_FLYWAY_ENABLED=false`; quitar credenciales de migración del proceso. Desarrollo/pruebas con propietario mantienen Flyway habilitado. `ops/create-runtime-role.sql` crea el rol del proyecto sin contraseña; asignar su contraseña real por gestión segura de secretos.
 
 ## Identidad HTTP
 
@@ -114,8 +116,51 @@ El script inicializa una instancia temporal exclusiva con trust solo en loopback
 
 Cobertura: firma JWT válida/incorrecta, issuer/audiencia/exp/nbf/UUID/anónimo/service_role, inyección de IDs/roles, suspensión, CORS, enmascaramiento, DTO, Flyway, FK/UNIQUE, rollback, alta concurrente, permisos persistidos, provisión auditada y RLS runtime.
 
-## Próximo: HU-01
+## HU-01: reporte con evidencia privada
 
-Se necesitan catálogos aprobados, límites geográficos y configuración real de proyecto/bucket privado `reportes-evidencias`. Implementar migraciones de reportes/fotos/historial, POST multipart, archivos/coordenadas, código transaccional ARQ-AAAA-NNNNNN, estado RECIBIDO, acceso privado y compensación de Storage con pruebas. No hay conexión Supabase real ni despliegue realizado en esta entrega.
+| Método / ruta | Función |
+|---|---|
+| GET `/api/catalogos/distritos` | Público; únicamente distritos activos |
+| GET `/api/catalogos/tipos-barrera` | Público; únicamente tipos activos |
+| POST `/api/reportes` | CIUDADANO activo; multipart `datos` JSON + una sola `foto` |
+| GET `/api/reportes/{id}` | Propietario o administrador; 404 también para reportes ajenos |
+| GET `/api/reportes/{id}/fotos/{fotoId}` | Propietario o administrador; bytes con no-store; sin URL pública |
+
+POST recibe el contrato de la guía en `requests.http` y responde 201, Location y `{id,codigo,estado,fechaCreacion}`. Ciudadano, estado y fechas nunca vienen del cliente. ADMINISTRADOR solo puede crear si también tiene rol CIUDADANO. Severidad admitida: BAJA/MEDIA/ALTA. Descripción no vacía hasta 3000 caracteres y dirección hasta 500. IDs de catálogos activos; coordenadas dentro del intervalo general y el área configurada. Precisión hasta siete decimales. No se afirma que un bounding box sea un límite administrativo oficial.
+
+Foto JPEG/PNG real: MIME, firma, terminación y decodificación coincidentes; hasta 5 MiB, hasta 25 millones de píxeles, exactamente una imagen. El nombre original no se utiliza. Las claves aleatorias `evidencias/<UUID>.png|jpg` solo se guardan como object_key; el detalle HTTP publica metadatos y enlace autorizado, nunca la clave de Storage. Se comprueba que el bucket siga siendo privado antes de subir/descargar. Adaptador con TLS, sin redirects, timeout y respuesta acotada. Los catálogos y el detalle no fingen resultados de IA ni integraciones oficiales.
+
+El código ARQ-AAAA-NNNNNN usa un contador por año bloqueado y actualizado dentro de la transacción; año de America/Lima, máximo 999999 al año (409 al agotarse). Reporte, foto, historial RECIBIDO, auditoría y confirmación de carga se confirman juntos. No hay endpoint para cambiar estados en esta fase. Límite persistido de cinco intentos de carga válidos por ciudadano/minuto, configurable 1..60: es una ventana fija compartida entre instancias, no un contador de memoria; 429 con Retry-After. El proxy debe limitar también tamaño, concurrencia y tráfico antes de autenticación.
+
+### Storage y compensación
+
+Antes de llamar a Storage se confirma un registro en `archivo_cargas`. Si falla el INSERT posterior a una carga confirmada se intenta borrar el objeto, bajo bloqueo y comprobación de que no esté referenciado. Si COMMIT sí ocurrió pero se perdió su respuesta, la intención ya no existe y no se borra la evidencia. Un fallo/timeout ambiguo de subida conserva la intención, para no competir con una carga aún en curso. Caídas del proceso también dejan una limpieza recuperable.
+
+El worker revisa cada minuto hasta 20 intenciones vencidas (30 minutos de margen); bloquea cada registro y borra solo objetos sin referencia. Si falla la eliminación conserva la intención, incrementa intentos y reprograma 15 minutos. Varios workers se serializan por fila. Monitorizar pendientes/antigüedad/intentos en operación; no borrar filas manualmente antes de limpiar el objeto. Los objetos se borran por Storage API, nunca por DELETE directo de `storage.objects`.
+
+### Activación real
+
+1. Definir credenciales JDBC legítimas del propietario/runtime y `SUPABASE_STORAGE_SECRET_KEY` desde el gestor de secretos. El conector no entrega contraseñas JDBC ni secret keys; no se inventaron valores. La URL/issuer/JWKS públicos del proyecto real están en `.env.example`; JWKS ES256 comprobado.
+2. **Solo para el proyecto ya provisionado mediante el conector**: las fuentes V1..V3 se aplicaron con historial de Supabase, antes de tener credenciales JDBC. Tras verificar ese esquema y antes del primer arranque Flyway, el propietario debe adoptarlo una vez:
+
+```sh
+./mvnw flyway:baseline -Dflyway.baselineVersion=3
+./mvnw flyway:validate flyway:migrate
+```
+
+No usar baseline para una base vacía ni para ocultar diferencias. Bases nuevas ajenas al proyecto conectado ejecutan simplemente flyway:migrate, que aplica V1..V3. El script local con `-CheckBootstrap` verifica ambas vías en bases desechables. No se modificó manualmente `flyway_schema_history`. Después de la adopción, nuevas versiones se gestionan exclusivamente con Flyway para mantener una sola autoridad de migraciones de aplicación. El bucket se configura aparte mediante `ops/supabase-private-bucket.sql` (Supabase únicamente).
+
+3. Cargar catálogos aprobados por operación/migración revisada; no hay semillas oficiales inventadas. Definir REPORTES_LAT_MIN/MAX y REPORTES_LON_MIN/MAX según el área aprobada. Sin esos datos no se habilita el registro.
+4. `REPORTES_HABILITADO=true` habilita el adaptador real y exige URL HTTPS, clave y área válida al arrancar. Por defecto false: POST devuelve 503, preservando identidad y salud operativas. No existe un Storage falso en producción.
+
+Supabase está provisionado, pero no se afirma un arranque remoto del backend, login real ni carga de foto real hasta suministrar esas credenciales/configuración. `SUPABASE_STORAGE_SECRET_KEY` nunca va al cliente. Bucket `reportes-evidencias` privado con límite 5242880 bytes y MIME JPEG/PNG; sin políticas de acceso directo anon/authenticated. Seguridad revisada con Supabase advisors sin avisos tras configurar runtime. Avisos informativos de índices sin uso son esperables en una base vacía.
+
+Pruebas adicionales: use case/compensación, firmas/decode de imagen, API HTTP de Storage contra servidor de prueba, límites de respuesta/red, integración real de transacciones, IDOR, códigos concurrentes, limpieza diferida y flujo completo con rol runtime restringido. No se guardaron usuarios/reportes ficticios en la base real.
+
+```powershell
+.\ops\test-local-postgres.ps1 -Port 55440 -CheckBootstrap
+```
+
+Siguiente iteración: listados propios paginados, filtros e historial consultable; luego administración/transiciones. La lectura segura de la evidencia se incluyó junto a HU-01 para cerrar el ciclo mínimo del reporte.
 
 Referencias: [JWT Supabase](https://supabase.com/docs/guides/auth/jwts), [Resource Server Spring Security 6.5](https://docs.spring.io/spring-security/reference/6.5/servlet/oauth2/resource-server/jwt.html). El [cambio TLS de Supabase](https://supabase.com/changelog/cbc-tls-ciphers-deprecated) requiere clientes modernos; se usa HTTPS de Java 21.

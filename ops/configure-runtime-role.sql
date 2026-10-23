@@ -37,4 +37,33 @@ DROP POLICY IF EXISTS backend_read ON accesible.distritos;
 CREATE POLICY backend_read ON accesible.distritos FOR SELECT TO :"runtime_role" USING (true);
 DROP POLICY IF EXISTS backend_read ON accesible.tipos_barrera;
 CREATE POLICY backend_read ON accesible.tipos_barrera FOR SELECT TO :"runtime_role" USING (true);
+-- HU-01: server-side access only, never anon/authenticated. No UPDATE/DELETE on reports.
+GRANT SELECT, INSERT ON accesible.reportes, accesible.reporte_fotos, accesible.historial_estados TO :"runtime_role";
+GRANT INSERT ON accesible.auditoria TO :"runtime_role";
+GRANT SELECT, INSERT, UPDATE ON accesible.contadores_reporte, accesible.reporte_limites TO :"runtime_role";
+GRANT SELECT, INSERT, UPDATE, DELETE ON accesible.archivo_cargas TO :"runtime_role";
+GRANT USAGE ON SEQUENCE accesible.reportes_id_seq, accesible.reporte_fotos_id_seq,
+    accesible.historial_estados_id_seq, accesible.auditoria_id_seq TO :"runtime_role";
+DROP POLICY IF EXISTS backend_read ON accesible.reportes;
+CREATE POLICY backend_read ON accesible.reportes FOR SELECT TO :"runtime_role" USING (true);
+DROP POLICY IF EXISTS backend_create ON accesible.reportes;
+CREATE POLICY backend_create ON accesible.reportes FOR INSERT TO :"runtime_role" WITH CHECK (estado='RECIBIDO' AND canal='WEB');
+DROP POLICY IF EXISTS backend_read ON accesible.reporte_fotos;
+CREATE POLICY backend_read ON accesible.reporte_fotos FOR SELECT TO :"runtime_role" USING (true);
+DROP POLICY IF EXISTS backend_create ON accesible.reporte_fotos;
+CREATE POLICY backend_create ON accesible.reporte_fotos FOR INSERT TO :"runtime_role" WITH CHECK (clase_foto='EVIDENCIA');
+DROP POLICY IF EXISTS backend_read ON accesible.historial_estados;
+CREATE POLICY backend_read ON accesible.historial_estados FOR SELECT TO :"runtime_role" USING (true);
+DROP POLICY IF EXISTS backend_create ON accesible.historial_estados;
+CREATE POLICY backend_create ON accesible.historial_estados FOR INSERT TO :"runtime_role"
+    WITH CHECK (estado_anterior IS NULL AND estado_nuevo='RECIBIDO');
+DROP POLICY IF EXISTS backend_create ON accesible.auditoria;
+CREATE POLICY backend_create ON accesible.auditoria FOR INSERT TO :"runtime_role"
+    WITH CHECK (accion='CREAR_REPORTE' AND entidad='reportes');
+DROP POLICY IF EXISTS backend_access ON accesible.contadores_reporte;
+CREATE POLICY backend_access ON accesible.contadores_reporte TO :"runtime_role" USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS backend_access ON accesible.reporte_limites;
+CREATE POLICY backend_access ON accesible.reporte_limites TO :"runtime_role" USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS backend_access ON accesible.archivo_cargas;
+CREATE POLICY backend_access ON accesible.archivo_cargas TO :"runtime_role" USING (true) WITH CHECK (true);
 COMMIT;

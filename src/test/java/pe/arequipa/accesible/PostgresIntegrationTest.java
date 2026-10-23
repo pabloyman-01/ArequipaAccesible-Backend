@@ -23,15 +23,25 @@ import org.flywaydb.core.Flyway;
 import pe.arequipa.accesible.application.command.*;
 import pe.arequipa.accesible.application.usecase.PerfilUseCase;
 import pe.arequipa.accesible.domain.model.*;
+import pe.arequipa.accesible.domain.port.out.*;
+import pe.arequipa.accesible.infrastructure.storage.LimpiezaArchivos;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.mock.web.MockMultipartFile;
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /** Dedicated disposable PostgreSQL only; never use an existing application database. */
 @SpringBootTest(properties={"app.require-https=false","app.jwt.issuer=https://identity.example.test/auth/v1",
-        "app.jwt.jwks-uri=https://identity.example.test/auth/v1/.well-known/jwks.json"})
+        "app.jwt.jwks-uri=https://identity.example.test/auth/v1/.well-known/jwks.json",
+        "app.reportes.habilitado=true","app.reportes.lat-min=-17","app.reportes.lat-max=-16",
+        "app.reportes.lon-min=-72","app.reportes.lon-max=-71","app.reportes.limpieza-ms=3600000"})
 @AutoConfigureMockMvc
 @EnabledIf("databaseAvailable")
 class PostgresIntegrationTest {
@@ -66,9 +76,14 @@ class PostgresIntegrationTest {
     @Autowired PerfilUseCase perfiles;
     @Autowired Flyway flyway;
     @MockitoBean JwtDecoder decoder;
+    @MockitoBean ArchivoStoragePort storage;
+    @Autowired ReporteRepositoryPort reportes;
+    @Autowired LimpiezaArchivos limpieza;
+    @Autowired ObjectMapper json;
+    @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
     UUID id;
     @BeforeEach void setup() {
-        jdbc.execute("TRUNCATE accesible.auditoria, accesible.usuario_roles, accesible.usuarios, accesible.distritos, auth.users CASCADE");
+        jdbc.execute("TRUNCATE accesible.auditoria, accesible.usuario_roles, accesible.usuarios, accesible.distritos, accesible.tipos_barrera, accesible.archivo_cargas, accesible.contadores_reporte, auth.users RESTART IDENTITY CASCADE");
         id = UUID.randomUUID();
         auth(id);
         when(decoder.decode(anyString())).thenAnswer(i -> {
@@ -86,7 +101,7 @@ class PostgresIntegrationTest {
     UsuarioPerfil registrar() { return perfiles.registrar(id,id+"@example.test",new DatosPerfil("Ana","Perez","DNI","12345678",null,null)); }
     @Test void migrationsValidAndAuthFkPresent() {
         flyway.validate();
-        assertThat(Arrays.stream(flyway.info().applied()).filter(m -> m.getVersion() != null)).hasSize(2);
+        assertThat(Arrays.stream(flyway.info().applied()).filter(m -> m.getVersion() != null)).hasSize(3);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM pg_constraint WHERE conname='usuarios_auth_fk'",Integer.class)).isEqualTo(1);
     }
     @Test void healthIsPublic() throws Exception {
@@ -184,7 +199,7 @@ class PostgresIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT count(*) FROM accesible.auditoria",Integer.class)).isZero();
     }
     @Test void runtimeRoleCannotGrantAdministratorOrChangeAccountState() throws Exception {
-        registrar();
+        prepararReporte();
         jdbc.execute("""
             DO $$ BEGIN
             IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='accesible_runtime_test') THEN
@@ -202,6 +217,181 @@ class PostgresIntegrationTest {
                     .isInstanceOf(java.sql.SQLException.class);
             s.execute("RESET ROLE");
         }
+        var tx=new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        UUID pending=tx.execute(status -> {
+            jdbc.execute("SET LOCAL ROLE accesible_runtime_test");
+            return reportes.reservarCarga(id,"evidencias/"+UUID.randomUUID()+".png",5);
+        });
+        var input=new CrearReporte(1L,Severidad.ALTA,"Prueba de permisos",1L,"Dirección de prueba",new java.math.BigDecimal("-16.4"),new java.math.BigDecimal("-71.5"));
+        var image=new ImagenValidada(png(),"image/png","png");
+        var created=tx.execute(status -> {
+            jdbc.execute("SET LOCAL ROLE accesible_runtime_test");
+            return reportes.crear(input,id,pending,image,Instant.now());
+        });
+        assertThat(created.estado()).isEqualTo("RECIBIDO");
+        // Lost COMMIT acknowledgement must not delete an already committed evidence object.
+        reportes.limpiarCarga(pending,true,storage::eliminar);
+        verify(storage,never()).eliminar(anyString());
     }
     @AfterAll static void stop() { if (container != null) container.stop(); }
+
+    void prepararReporte() {
+        registrar();
+        jdbc.update("INSERT INTO accesible.distritos(nombre) VALUES ('Distrito de prueba, no oficial')");
+        jdbc.update("INSERT INTO accesible.tipos_barrera(codigo,nombre) VALUES ('TEST-01','Barrera de prueba, no oficial')");
+    }
+    byte[] png() throws Exception {
+        var out=new ByteArrayOutputStream();
+        ImageIO.write(new BufferedImage(2,2,BufferedImage.TYPE_INT_RGB),"png",out);
+        return out.toByteArray();
+    }
+    String datosReporte() { return """
+        {"tipoBarreraId":1,"severidadDeclarada":"ALTA","descripcion":"Rampa rota de prueba",
+         "distritoId":1,"direccionReferencia":"Dirección ficticia de prueba","latitud":-16.3989,"longitud":-71.5350}
+        """; }
+    MockMultipartFile datos(String body) { return new MockMultipartFile("datos","","application/json",body.getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
+    MockMultipartFile foto() throws Exception { return new MockMultipartFile("foto","../../nombre-personal.png","image/png",png()); }
+    long crearReporte() throws Exception {
+        var response=mvc.perform(multipart("/api/reportes").file(datos(datosReporte())).file(foto()).header("Authorization",bearer()))
+                .andExpect(status().isCreated()).andExpect(header().exists("Location"))
+                .andExpect(jsonPath("$.estado").value("RECIBIDO")).andReturn().getResponse().getContentAsString();
+        return json.readTree(response).get("id").asLong();
+    }
+    int count(String table) { return jdbc.queryForObject("SELECT count(*) FROM accesible."+table,Integer.class); }
+    @Test void reportCreatedWithEvidenceHistoryAuditAndPrivateDetail() throws Exception {
+        prepararReporte(); long reportId=crearReporte();
+        assertThat(count("reportes")).isEqualTo(1); assertThat(count("reporte_fotos")).isEqualTo(1);
+        assertThat(count("historial_estados")).isEqualTo(1); assertThat(count("auditoria")).isEqualTo(1);
+        assertThat(count("archivo_cargas")).isZero();
+        assertThat(jdbc.queryForObject("SELECT estado_nuevo FROM accesible.historial_estados",String.class)).isEqualTo("RECIBIDO");
+        assertThat(jdbc.queryForObject("SELECT codigo FROM accesible.reportes",String.class)).matches("ARQ-[0-9]{4}-000001");
+        verify(storage).subir(matches("evidencias/[a-f0-9-]{36}\\.png"),any());
+        mvc.perform(get("/api/reportes/"+reportId).header("Authorization",bearer()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.fotos[0].objectKey").doesNotExist())
+                .andExpect(jsonPath("$.ciudadanoId").doesNotExist());
+    }
+    @Test void reportCannotBeReadByAnotherCitizenButAdminCanRead() throws Exception {
+        prepararReporte(); long reportId=crearReporte();
+        UUID other=UUID.randomUUID(); auth(other);
+        perfiles.registrar(other,other+"@example.test",new DatosPerfil("Otro","Prueba","DNI","87654321",null,null));
+        mvc.perform(get("/api/reportes/"+reportId).header("Authorization","Bearer "+other)).andExpect(status().isNotFound());
+        mvc.perform(get("/api/reportes/"+reportId+"/fotos/1").header("Authorization","Bearer "+other)).andExpect(status().isNotFound());
+        jdbc.update("INSERT INTO accesible.usuario_roles SELECT ?,id FROM accesible.roles WHERE codigo='ADMINISTRADOR'",other);
+        mvc.perform(get("/api/reportes/"+reportId).header("Authorization","Bearer "+other)).andExpect(status().isOk());
+        verify(storage,never()).descargar(anyString());
+    }
+    @Test void photoRequiresOwnershipAndIsServedWithoutCaching() throws Exception {
+        prepararReporte(); long reportId=crearReporte();
+        when(storage.descargar(anyString())).thenReturn(png());
+        mvc.perform(get("/api/reportes/"+reportId+"/fotos/1").header("Authorization",bearer()))
+                .andExpect(status().isOk()).andExpect(content().contentType("image/png"))
+                .andExpect(header().string("Cache-Control","no-store")).andExpect(content().bytes(png()));
+        mvc.perform(get("/api/reportes/"+reportId+"/fotos/999").header("Authorization",bearer())).andExpect(status().isNotFound());
+    }
+    @Test void invalidImageRejectedBeforeStorageOrDatabaseWrite() throws Exception {
+        prepararReporte();
+        mvc.perform(multipart("/api/reportes").file(datos(datosReporte()))
+                .file(new MockMultipartFile("foto","a.png","image/png","not a png".getBytes())).header("Authorization",bearer()))
+                .andExpect(status().isUnsupportedMediaType()).andExpect(jsonPath("$.code").value("FOTO_INVALIDA"));
+        assertThat(count("reportes")).isZero(); assertThat(count("archivo_cargas")).isZero(); verifyNoInteractions(storage);
+    }
+    @Test void oversizedImage413() throws Exception {
+        prepararReporte();
+        mvc.perform(multipart("/api/reportes").file(datos(datosReporte()))
+                .file(new MockMultipartFile("foto","a.png","image/png",new byte[ImagenValidada.MAX_BYTES+1])).header("Authorization",bearer()))
+                .andExpect(status().isPayloadTooLarge());
+        verifyNoInteractions(storage);
+    }
+    @Test void invalidCoordinatesAndEmptyDescription422() throws Exception {
+        prepararReporte();
+        for (String body:List.of(datosReporte().replace("-16.3989","91"),datosReporte().replace("Rampa rota de prueba","  "))) {
+            mvc.perform(multipart("/api/reportes").file(datos(body)).file(foto()).header("Authorization",bearer()))
+                    .andExpect(status().isUnprocessableEntity());
+        }
+        assertThat(count("reportes")).isZero(); verifyNoInteractions(storage);
+    }
+    @Test void inactiveCatalogue422() throws Exception {
+        prepararReporte(); jdbc.update("UPDATE accesible.tipos_barrera SET activo=false");
+        mvc.perform(multipart("/api/reportes").file(datos(datosReporte())).file(foto()).header("Authorization",bearer()))
+                .andExpect(status().isUnprocessableEntity()); verifyNoInteractions(storage);
+    }
+    @Test void onlyActiveCataloguesArePublic() throws Exception {
+        prepararReporte();
+        jdbc.update("INSERT INTO accesible.distritos(nombre,activo) VALUES ('Inactivo de prueba',false)");
+        mvc.perform(get("/api/catalogos/distritos")).andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(1));
+        mvc.perform(get("/api/catalogos/tipos-barrera")).andExpect(status().isOk()).andExpect(jsonPath("$[0].codigo").value("TEST-01"));
+    }
+    @Test void missingPhoto400AndDuplicatePhoto422() throws Exception {
+        prepararReporte();
+        mvc.perform(multipart("/api/reportes").file(datos(datosReporte())).header("Authorization",bearer())).andExpect(status().isBadRequest());
+        mvc.perform(multipart("/api/reportes").file(datos(datosReporte())).file(foto()).file(foto()).header("Authorization",bearer()))
+                .andExpect(status().isUnprocessableEntity()); verifyNoInteractions(storage);
+    }
+    @Test void clientCannotChooseCitizenOrInitialState() throws Exception {
+        prepararReporte();
+        for (String extra:List.of("\"ciudadanoId\":\""+UUID.randomUUID()+"\"","\"estado\":\"ATENDIDO\"")) {
+            mvc.perform(multipart("/api/reportes").file(datos(datosReporte().replace("}",","+extra+"}"))).file(foto()).header("Authorization",bearer()))
+                    .andExpect(status().isBadRequest());
+        }
+        verifyNoInteractions(storage);
+    }
+    @Test void postNeedsJwtAndActiveCitizen() throws Exception {
+        prepararReporte();
+        mvc.perform(multipart("/api/reportes").file(datos(datosReporte())).file(foto())).andExpect(status().isUnauthorized());
+        jdbc.update("UPDATE accesible.usuarios SET estado_cuenta='SUSPENDIDA' WHERE id=?",id);
+        mvc.perform(multipart("/api/reportes").file(datos(datosReporte())).file(foto()).header("Authorization",bearer()))
+                .andExpect(status().isForbidden()); verifyNoInteractions(storage);
+    }
+    @Test void networkFailureLeavesDurableCleanupIntent() throws Exception {
+        prepararReporte(); doThrow(new ReporteException(ReporteException.Motivo.STORAGE_NO_DISPONIBLE)).when(storage).subir(anyString(),any());
+        mvc.perform(multipart("/api/reportes").file(datos(datosReporte())).file(foto()).header("Authorization",bearer()))
+                .andExpect(status().isServiceUnavailable());
+        assertThat(count("reportes")).isZero(); assertThat(count("archivo_cargas")).isEqualTo(1);
+        verify(storage,never()).eliminar(anyString());
+        jdbc.update("UPDATE accesible.archivo_cargas SET limpiar_despues=now()-interval '1 minute'");
+        limpieza.ejecutar(); verify(storage).eliminar(anyString()); assertThat(count("archivo_cargas")).isZero();
+    }
+    @Test void persistenceFailureRollsBackEverythingAndDeletesUploadedObject() throws Exception {
+        prepararReporte();
+        jdbc.execute("ALTER TABLE accesible.auditoria ADD CONSTRAINT test_fail_audit CHECK (accion <> 'CREAR_REPORTE')");
+        try {
+            mvc.perform(multipart("/api/reportes").file(datos(datosReporte())).file(foto()).header("Authorization",bearer()))
+                    .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("REPORTE_CONFLICTO"));
+        } finally { jdbc.execute("ALTER TABLE accesible.auditoria DROP CONSTRAINT test_fail_audit"); }
+        for(String table:List.of("reportes","reporte_fotos","historial_estados","auditoria","contadores_reporte","archivo_cargas")) assertThat(count(table)).as(table).isZero();
+        verify(storage).eliminar(anyString());
+    }
+    @Test void failedCompensationIsRetriedFromDurableQueue() throws Exception {
+        prepararReporte();
+        doThrow(new ReporteException(ReporteException.Motivo.STORAGE_NO_DISPONIBLE)).when(storage).eliminar(anyString());
+        UUID pending=reportes.reservarCarga(id,"evidencias/"+UUID.randomUUID()+".png",5);
+        reportes.limpiarCarga(pending,true,storage::eliminar);
+        assertThat(count("archivo_cargas")).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT intentos FROM accesible.archivo_cargas",Integer.class)).isEqualTo(1);
+        doNothing().when(storage).eliminar(anyString());
+        jdbc.update("UPDATE accesible.archivo_cargas SET limpiar_despues=now()-interval '1 minute'");
+        limpieza.ejecutar(); assertThat(count("archivo_cargas")).isZero();
+    }
+    @Test void rateLimitIsSharedAndAtomic() throws Exception {
+        prepararReporte();
+        for(int i=0;i<5;i++) reportes.reservarCarga(id,"evidencias/"+UUID.randomUUID()+".png",5);
+        mvc.perform(multipart("/api/reportes").file(datos(datosReporte())).file(foto()).header("Authorization",bearer()))
+                .andExpect(status().isTooManyRequests()).andExpect(header().string("Retry-After","60"));
+        verifyNoInteractions(storage);
+    }
+    @RepeatedTest(3) void concurrentReportCodesAreUnique() throws Exception {
+        prepararReporte();
+        var input=new CrearReporte(1L,Severidad.ALTA,"Reporte concurrente de prueba",1L,"Dirección de prueba",
+                new java.math.BigDecimal("-16.3989"),new java.math.BigDecimal("-71.5350"));
+        var image=new ImagenValidada(png(),"image/png","png");
+        UUID a=reportes.reservarCarga(id,"evidencias/"+UUID.randomUUID()+".png",5);
+        UUID b=reportes.reservarCarga(id,"evidencias/"+UUID.randomUUID()+".png",5);
+        try(var pool=Executors.newFixedThreadPool(2)) {
+            var latch=new CountDownLatch(1);
+            var first=pool.submit(() -> { latch.await(); return reportes.crear(input,id,a,image,Instant.now()); });
+            var second=pool.submit(() -> { latch.await(); return reportes.crear(input,id,b,image,Instant.now()); }); latch.countDown();
+            assertThat(first.get(10,TimeUnit.SECONDS).codigo()).isNotEqualTo(second.get(10,TimeUnit.SECONDS).codigo());
+        }
+        assertThat(count("reportes")).isEqualTo(2); assertThat(count("archivo_cargas")).isZero();
+    }
 }

@@ -1,6 +1,6 @@
 # Entrega de iteraciones 0 y 1
 
-Fecha: 22/10/2026 (America/Lima). Base inspeccionada: commit `eba4b37` de `main`, únicamente README. Remoto conservado: https://github.com/pabloyman-01/ArequipaAccesible-Backend.git. Trabajo en `codex/iteraciones-0-1`.
+Fecha: 22/10/2026 (America/Lima). Base inspeccionada: commit `eba4b37` de `main`, únicamente README. Remoto conservado: https://github.com/pabloyman-01/ArequipaAccesible-Backend.git. Rama renombrada posteriormente a `feat/iteraciones-0-1` por preferencia del usuario. Este informe conserva el historial de comandos de esa primera entrega; HU-01 se documenta en VALIDACION_HU01.md.
 
 ## Especificación y alcance
 

@@ -23,6 +23,8 @@ public class SecurityConfig {
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(a -> a
                 .requestMatchers(HttpMethod.GET,"/actuator/health","/actuator/health/**").permitAll()
+                .requestMatchers(HttpMethod.GET,"/api/catalogos/distritos","/api/catalogos/tipos-barrera").permitAll()
+                .requestMatchers(HttpMethod.POST,"/api/reportes").hasRole("CIUDADANO")
                 .requestMatchers("/v3/api-docs/**","/swagger-ui/**","/swagger-ui.html").hasRole("ADMINISTRADOR")
                 .requestMatchers("/api/admin/**").hasRole("ADMINISTRADOR")
                 .requestMatchers("/api/usuarios/me").authenticated()

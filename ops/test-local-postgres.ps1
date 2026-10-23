@@ -1,10 +1,10 @@
-param([string]$PgBin = 'C:\Program Files\PostgreSQL\17\bin', [int]$Port = 55439)
+param([string]$PgBin = 'C:\Program Files\PostgreSQL\17\bin', [int]$Port = 55439, [switch]$CheckBootstrap)
 $ErrorActionPreference = 'Stop'
 $repoPath = Split-Path $PSScriptRoot -Parent
 $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
 $testPath = Join-Path $tempRoot ('arequipa-tests-' + [guid]::NewGuid().ToString('N'))
 $saved = @{}
-foreach ($name in @('TEST_DB_URL','TEST_DB_USERNAME','TEST_DB_PASSWORD')) { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
+foreach ($name in @('TEST_DB_URL','TEST_DB_USERNAME','TEST_DB_PASSWORD','DB_URL','MIGRATION_DB_USERNAME','MIGRATION_DB_PASSWORD')) { $saved[$name] = [Environment]::GetEnvironmentVariable($name) }
 $started = $false
 try {
     & "$PgBin\initdb.exe" -D $testPath -U codex_test -A trust --encoding=UTF8 --locale=C
@@ -23,7 +23,30 @@ try {
     $env:TEST_DB_USERNAME = 'codex_test'
     $env:TEST_DB_PASSWORD = ''
     Push-Location $repoPath
-    try { & .\mvnw.cmd -B verify; $result = $LASTEXITCODE } finally { Pop-Location }
+    try {
+        if ($CheckBootstrap) {
+            & "$PgBin\createdb.exe" -h 127.0.0.1 -p $Port -U codex_test bootstrap_test
+            if ($LASTEXITCODE -ne 0) { throw 'Bootstrap database creation failed' }
+            $bootstrapSql = "BEGIN;`nCREATE SCHEMA accesible;`nSET LOCAL search_path=accesible,pg_catalog;`n"
+            foreach ($migration in (Get-ChildItem -LiteralPath 'src/main/resources/db/migration' -Filter 'V*.sql' | Sort-Object Name)) {
+                $bootstrapSql += [IO.File]::ReadAllText($migration.FullName) + "`n"
+            }
+            $bootstrapSql += "COMMIT;`n"
+            $bootstrapPath = Join-Path $testPath 'bootstrap.sql'
+            [IO.File]::WriteAllText($bootstrapPath,$bootstrapSql,[Text.UTF8Encoding]::new($false))
+            & "$PgBin\psql.exe" -h 127.0.0.1 -p $Port -U codex_test -d bootstrap_test -v ON_ERROR_STOP=1 -f $bootstrapPath
+            if ($LASTEXITCODE -ne 0) { throw 'Bootstrap SQL failed' }
+            $env:DB_URL = "jdbc:postgresql://127.0.0.1:$Port/bootstrap_test"
+            $env:MIGRATION_DB_USERNAME = 'codex_test'
+            $env:MIGRATION_DB_PASSWORD = ''
+            & .\mvnw.cmd -B flyway:baseline '-Dflyway.baselineVersion=3'
+            if ($LASTEXITCODE -ne 0) { throw 'Bootstrap baseline failed' }
+            & .\mvnw.cmd -B flyway:validate flyway:migrate
+            if ($LASTEXITCODE -ne 0) { throw 'Bootstrap adoption failed' }
+        }
+        & .\mvnw.cmd -B verify
+        $result = $LASTEXITCODE
+    } finally { Pop-Location }
     if ($result -ne 0) { throw "Maven verify failed ($result)" }
 } finally {
     if ($started) { & "$PgBin\pg_ctl.exe" -D $testPath -m fast -w stop }
