@@ -153,7 +153,7 @@ No usar baseline para una base vacía ni para ocultar diferencias. Bases nuevas 
 3. Cargar catálogos aprobados por operación/migración revisada; no hay semillas oficiales inventadas. Definir REPORTES_LAT_MIN/MAX y REPORTES_LON_MIN/MAX según el área aprobada. Sin esos datos no se habilita el registro.
 4. `REPORTES_HABILITADO=true` habilita el adaptador real y exige URL HTTPS, clave y área válida al arrancar. Por defecto false: POST devuelve 503, preservando identidad y salud operativas. No existe un Storage falso en producción.
 
-La activación local ya usa JDBC real con `sslmode=verify-full` y el certificado CA oficial de Supabase. El backend arranca con el rol runtime restringido, sin Flyway en ejecución. El baseline 3 y la migración V4 se aplicaron y validaron mediante JDBC; el rol temporal de migración se eliminó después. `SUPABASE_STORAGE_SECRET_KEY` nunca va al cliente. Bucket `reportes-evidencias` privado con límite 5242880 bytes y MIME JPEG/PNG; sin políticas de acceso directo anon/authenticated. El reporte y la foto con una sesión real siguen pendientes; véase `VALIDACION_ACTIVACION.md`.
+La activación local ya usa JDBC real con `sslmode=verify-full` y el certificado CA oficial de Supabase. El backend arranca con el rol runtime restringido, sin Flyway en ejecución. El baseline 3 y la migración V4 se aplicaron y validaron mediante JDBC; el rol temporal de migración se eliminó después. `SUPABASE_STORAGE_SECRET_KEY` nunca va al cliente. Bucket `reportes-evidencias` privado con límite 5242880 bytes y MIME JPEG/PNG; sin políticas de acceso directo anon/authenticated. El 2026-10-23 se verificó el flujo real con una cuenta confirmada: reporte técnico ARQ-2026-000001, imagen en Storage y lectura autorizada con bytes idénticos; véase `VALIDACION_ACTIVACION.md`.
 
 V4 carga el piloto aprobado: Arequipa (Cercado) y seis categorías internas `PROY-01` a `PROY-06`. El área operativa aprobada es latitud -16.43 a -16.36 y longitud -71.57 a -71.50; no constituye un límite municipal oficial. `.env.local` y `.local/` están excluidos de Git.
 
@@ -164,9 +164,20 @@ En este equipo, cargar las variables sin imprimir secretos y arrancar:
 .\mvnw.cmd -B spring-boot:run
 ```
 
-Para confirmar una sesión real por correo, definir localmente `ACTIVATION_EMAIL` y `SUPABASE_PUBLISHABLE_KEY` y ejecutar `node ops/activation-auth.mjs`. Requiere el redirect local permitido en Supabase. El enlace debe abrirse en el mismo equipo; el callback conserva únicamente la sesión en `.local/auth-session.json`, sin imprimir tokens. Cada arranque solicita un correo y está sujeto a los límites de Auth: no reiniciarlo repetidamente. Detener el proceso y eliminar la sesión local al terminar la prueba.
+Para confirmar una sesión real por correo, definir localmente `ACTIVATION_EMAIL` y `SUPABASE_PUBLISHABLE_KEY` y ejecutar `node ops/activation-auth.mjs`. Requiere el redirect local permitido en Supabase. El enlace debe abrirse en el mismo equipo; el callback conserva únicamente la sesión en `.local/auth-session.json`, sin imprimir tokens. Una sesión capturada se valida contra Supabase y se reutiliza sin enviar otro correo. `ACTIVATION_SEND_EMAIL=false` impide el envío al reiniciar el helper. No reiniciarlo repetidamente para solicitar enlaces: Auth aplica límites de correo.
 
-Pruebas adicionales: use case/compensación, firmas/decode de imagen, API HTTP de Storage contra servidor de prueba, límites de respuesta/red, integración real de transacciones, IDOR, códigos concurrentes, limpieza diferida y flujo completo con rol runtime restringido. No se guardaron usuarios/reportes ficticios en la base real.
+Con el backend activo y una sesión real capturada:
+
+```powershell
+. .\ops\load-local-env.ps1
+node ops/verify-hu01-real.mjs
+```
+
+Si falta el perfil, el verificador abre un servidor exclusivo en loopback: visitar `http://localhost:3001` e introducir los datos personalmente. No se solicitan documentos por chat ni se inventan datos de identidad. El formulario usa nonce y comprobaciones de Host/Origin; el servidor se cierra al guardar. El perfil conserva el estado NO_VERIFICADO: confirmar un correo no verifica un documento.
+
+Después crea un reporte identificado como PRUEBA TECNICA, con una imagen PNG sintética de comprobación. No corresponde a una incidencia real. Verifica creación 201, consultas 200, coincidencia SHA-256, `no-store` y acceso sin token 401. La evidencia local `.local/hu01-real-proof.json` evita repetir el POST: siguientes ejecuciones vuelven a consultar el mismo reporte. Ante un POST ambiguo, revisar el intento y la base antes de reintentar. Los helpers no son un frontend desplegable; detenerlos y eliminar la sesión local al terminar la prueba.
+
+Pruebas adicionales: use case/compensación, firmas/decode de imagen, API HTTP de Storage contra servidor de prueba, límites de respuesta/red, integración real de transacciones, IDOR, códigos concurrentes, limpieza diferida y flujo completo con rol runtime restringido. La base real conserva un único reporte técnico de validación, explícitamente identificado como tal.
 
 ```powershell
 .\ops\test-local-postgres.ps1 -Port 55440 -CheckBootstrap

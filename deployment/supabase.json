@@ -34,5 +34,8 @@
   "internalPilotCataloguesSeeded": true,
   "runtimeJdbcVerified": true,
   "runtimeTlsMode": "verify-full",
-  "temporaryMigrationRoleRemoved": true
+  "temporaryMigrationRoleRemoved": true,
+  "realHu01Verified": true,
+  "realHu01VerifiedOn": "2026-10-23",
+  "technicalReportCode": "ARQ-2026-000001"
 }
