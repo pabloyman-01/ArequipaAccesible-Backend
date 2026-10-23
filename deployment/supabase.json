@@ -42,5 +42,6 @@
   "runtimeAdministrativePoliciesConfiguredOn": "2026-10-23",
   "activeAdministratorProvisioned": true,
   "administratorGrantAudited": true,
-  "realAdministrativeHttpVerified": false
+  "realAdministrativeHttpVerified": true,
+  "realAdministrativeHttpVerifiedOn": "2026-10-23"
 }

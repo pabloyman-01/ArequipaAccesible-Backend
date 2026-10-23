@@ -53,9 +53,11 @@ El backend arrancó con el rol runtime real después de configurar las política
 
 Antes de este bloque había cero administradores activos. El titular autorizó expresamente la concesión de ADMINISTRADOR a su cuenta confirmada. Se aplicó en una transacción la lógica de `ops/provision-admin.sql`, resolviendo la cuenta por su correo confirmado y usando al titular como actor y destinatario de la concesión inicial. Se conservó CIUDADANO y se verificó exactamente un evento OTORGAR_ADMINISTRADOR. La operación es idempotente y no publica datos personales ni credenciales en este registro.
 
-La prueba administrativa positiva en Supabase real queda pendiente de renovar la sesión caducada; se solicitó un enlace nuevo mediante `node ops/activation-auth.mjs`. Los flujos completos administrativos sí pasaron con PostgreSQL real desechable y las políticas runtime.
+Después de renovar la sesión mediante `node ops/activation-auth.mjs`, se ejecutó un script Node por stdin (`node --input-type=module`) con fetch y aserciones, usando el token guardado localmente sin imprimirlo. Respondieron 200 los listados administrativos de reportes y usuarios, el listado propio, el detalle y el historial. Los tres listados contenían un registro cada uno.
 
-No se cambiaron estados de reportes/cuentas reales como parte de las pruebas realizadas hasta aquí.
+El reporte exclusivamente técnico ARQ-2026-000001 pasó mediante PATCH de RECIBIDO a EN_EVALUACION (200), con motivo que identifica la prueba y aclara que no representa una incidencia real. El historial contiene dos entradas; una consulta independiente en Supabase confirmó exactamente un evento CAMBIAR_ESTADO_REPORTE y un evento OTORGAR_ADMINISTRADOR. La ruta de cuentas respondió 200 a ACTIVA -> ACTIVA sin cambiar ninguna cuenta ni generar eventos CAMBIAR_ESTADO_USUARIO (cero). No se suspendieron cuentas.
+
+La evidencia sin tokens está en `.local/admin-real-proof.json`, ignorada por Git. Se cerró únicamente el callback temporal del puerto 3000 mediante `Stop-Process -Id 5856`; el backend permanece activo en 8080. La integración continua del commit de concesión `69ab900` terminó correctamente: [ejecución 39917930026](https://github.com/pabloyman-01/ArequipaAccesible-Backend/actions/runs/39917930026). Esta verificación añadió documentación y evidencia operativa; no modificó código ni migraciones.
 
 ## Archivos
 
