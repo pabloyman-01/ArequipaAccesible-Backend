@@ -24,6 +24,7 @@ public class ApiExceptionHandler {
     @ExceptionHandler(ReporteException.class)
     ResponseEntity<ApiError> reporte(ReporteException e) {
         return switch(e.motivo()) {
+            case CONSULTA_INVALIDA -> error(400,"FILTROS_INVALIDOS","Revise filtros, límite y cursor");
             case INVALIDO -> error(422,"REPORTE_INVALIDO","Revise los datos, catálogos activos y área permitida");
             case FOTO_GRANDE -> error(413,"FOTO_DEMASIADO_GRANDE","La imagen supera 5 MiB");
             case FOTO_INVALIDA -> error(415,"FOTO_INVALIDA","Se requiere una imagen JPEG o PNG válida y MIME coincidente");
@@ -38,8 +39,10 @@ public class ApiExceptionHandler {
     }
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     ResponseEntity<ApiError> grande() { return error(413,"FOTO_DEMASIADO_GRANDE","La imagen supera 5 MiB o la petición supera 6 MiB"); }
-    @ExceptionHandler({MissingServletRequestPartException.class,MultipartException.class,MethodArgumentTypeMismatchException.class})
+    @ExceptionHandler({MissingServletRequestPartException.class,MultipartException.class})
     ResponseEntity<ApiError> multipart() { return error(400,"PETICION_INVALIDA","Revise partes multipart e identificadores"); }
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    ResponseEntity<ApiError> parametro() { return error(400,"PETICION_INVALIDA","Revise los parámetros y sus formatos"); }
     @ExceptionHandler(PerfilException.class)
     ResponseEntity<ApiError> perfil(PerfilException e) {
         return switch(e.motivo()) {

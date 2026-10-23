@@ -229,6 +229,11 @@ class PostgresIntegrationTest {
             return reportes.crear(input,id,pending,image,Instant.now());
         });
         assertThat(created.estado()).isEqualTo("RECIBIDO");
+        var listed=tx.execute(status -> {
+            jdbc.execute("SET LOCAL ROLE accesible_runtime_test");
+            return reportes.listarPropios(id,new ConsultaReportes(20,null,null,null,null,null,null,null,null));
+        });
+        assertThat(listed).extracting(ResumenReporte::id).containsExactly(created.id());
         // Lost COMMIT acknowledgement must not delete an already committed evidence object.
         reportes.limpiarCarga(pending,true,storage::eliminar);
         verify(storage,never()).eliminar(anyString());
@@ -249,6 +254,117 @@ class PostgresIntegrationTest {
         {"tipoBarreraId":1,"severidadDeclarada":"ALTA","descripcion":"Rampa rota de prueba",
          "distritoId":1,"direccionReferencia":"Dirección ficticia de prueba","latitud":-16.3989,"longitud":-71.5350}
         """; }
+    long filaListado(UUID owner, int numero, String fecha, String estado, String severidad, long tipo, long distrito) {
+        return jdbc.queryForObject("""
+            INSERT INTO accesible.reportes(codigo,ciudadano_id,tipo_barrera_id,distrito_id,severidad_declarada,
+                descripcion,direccion_referencia,latitud,longitud,estado,fecha_creacion,fecha_actualizacion)
+            VALUES (?,?,?,?,?,'Reporte tecnico de prueba','Referencia tecnica',-16.4,-71.5,?,?::timestamptz,?::timestamptz) RETURNING id
+            """,Long.class,"ARQ-2026-%06d".formatted(numero),owner,tipo,distrito,severidad,estado,fecha,fecha);
+    }
+    UUID otroCiudadano() {
+        UUID other=UUID.randomUUID();auth(other);
+        perfiles.registrar(other,other+"@example.test",new DatosPerfil("Otro","Prueba","DNI","87654321",null,null));
+        return other;
+    }
+    com.fasterxml.jackson.databind.JsonNode listado(org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder request) throws Exception {
+        var result=mvc.perform(request.header("Authorization",bearer())).andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control","no-store")).andReturn();
+        return json.readTree(result.getResponse().getContentAsString());
+    }
+    @Test void ownListRequiresAuthenticationAndCitizenProfile() throws Exception {
+        mvc.perform(get("/api/reportes")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/reportes").header("Authorization",bearer())).andExpect(status().isForbidden());
+        registrar();
+        jdbc.update("DELETE FROM accesible.usuario_roles WHERE usuario_id=?",id);
+        jdbc.update("INSERT INTO accesible.usuario_roles SELECT ?,id FROM accesible.roles WHERE codigo='ADMINISTRADOR'",id);
+        mvc.perform(get("/api/reportes").header("Authorization",bearer())).andExpect(status().isForbidden());
+    }
+    @Test void emptyOwnListHasNoCursor() throws Exception {
+        prepararReporte();var page=listado(get("/api/reportes"));
+        assertThat(page.get("elementos").size()).isZero();assertThat(page.get("limite").asInt()).isEqualTo(20);
+        assertThat(page.get("hayMas").asBoolean()).isFalse();assertThat(page.get("siguienteCursor").isNull()).isTrue();
+    }
+    @Test void ownListPaginatesTiesWithoutRepeatingAfterConcurrentInsert() throws Exception {
+        prepararReporte();
+        String same="2026-10-23T05:00:00.123456Z";
+        long first=filaListado(id,1,same,"RECIBIDO","ALTA",1,1);
+        long second=filaListado(id,2,same,"RECIBIDO","ALTA",1,1);
+        long third=filaListado(id,3,same,"RECIBIDO","ALTA",1,1);
+        filaListado(otroCiudadano(),99,"2026-10-25T05:00:00Z","RECIBIDO","ALTA",1,1);
+        var page=listado(get("/api/reportes").param("limite","2"));
+        assertThat(page.get("elementos").size()).isEqualTo(2);
+        assertThat(page.at("/elementos/0/id").asLong()).isEqualTo(third);
+        assertThat(page.at("/elementos/1/id").asLong()).isEqualTo(second);
+        assertThat(page.get("hayMas").asBoolean()).isTrue();
+        String cursor=page.get("siguienteCursor").asText();
+        filaListado(id,4,"2026-10-26T05:00:00Z","RECIBIDO","ALTA",1,1);
+        long backdated=filaListado(id,5,"2026-10-22T05:00:00Z","RECIBIDO","ALTA",1,1);
+        var next=listado(get("/api/reportes").param("limite","2").param("cursor",cursor));
+        assertThat(next.get("elementos").size()).isEqualTo(2);
+        assertThat(next.at("/elementos/0/id").asLong()).isEqualTo(first);
+        assertThat(next.at("/elementos/1/id").asLong()).isEqualTo(backdated);
+        assertThat(next.get("hayMas").asBoolean()).isFalse();assertThat(next.get("siguienteCursor").isNull()).isTrue();
+        assertThat(page.toString()).doesNotContain("ciudadanoId","objectKey","fotos",id.toString());
+        verifyNoInteractions(storage);
+    }
+    @Test void ownListFiltersIndividuallyAndTogetherWithInclusiveLimaDates() throws Exception {
+        prepararReporte();
+        jdbc.update("INSERT INTO accesible.distritos(nombre) VALUES ('Segundo distrito de prueba')");
+        jdbc.update("INSERT INTO accesible.tipos_barrera(codigo,nombre) VALUES ('TEST-02','Segunda barrera de prueba')");
+        long a=filaListado(id,1,"2026-10-23T04:59:59.999999Z","RECIBIDO","ALTA",1,1);
+        long b=filaListado(id,2,"2026-10-23T05:00:00Z","ATENDIDO","BAJA",2,2);
+        long c=filaListado(id,3,"2026-10-24T05:00:00Z","RECIBIDO","MEDIA",1,2);
+        var cases=List.of(Map.entry("estado=ATENDIDO",b),Map.entry("severidadDeclarada=ALTA",a),
+                Map.entry("tipoBarreraId=2",b),Map.entry("distritoId=1",a),Map.entry("codigo=arq-2026-000003",c),
+                Map.entry("desde=2026-10-23&hasta=2026-10-23",b),
+                Map.entry("estado=RECIBIDO&tipoBarreraId=1&distritoId=2&severidadDeclarada=MEDIA&desde=2026-10-23&hasta=2026-10-24",c));
+        for(var entry:cases){
+            var page=listado(get("/api/reportes?"+entry.getKey()));
+            assertThat(page.get("elementos").size()).as(entry.getKey()).isEqualTo(1);
+            assertThat(page.at("/elementos/0/id").asLong()).as(entry.getKey()).isEqualTo(entry.getValue());
+        }
+        assertThat(listado(get("/api/reportes?tipoBarreraId=999")).get("elementos").size()).isZero();
+    }
+    @Test void ownListAcceptsBothPageSizeBoundaries() throws Exception {
+        prepararReporte();filaListado(id,1,"2026-10-23T05:00:00Z","RECIBIDO","ALTA",1,1);
+        filaListado(id,2,"2026-10-24T05:00:00Z","RECIBIDO","ALTA",1,1);
+        var minimum=listado(get("/api/reportes?limite=1"));
+        assertThat(minimum.get("elementos").size()).isEqualTo(1);assertThat(minimum.get("hayMas").asBoolean()).isTrue();
+        var maximum=listado(get("/api/reportes?limite=100"));
+        assertThat(maximum.get("elementos").size()).isEqualTo(2);assertThat(maximum.get("hayMas").asBoolean()).isFalse();
+    }
+    @Test void ownListIncludesHistoricalReportsForInactiveCatalogues() throws Exception {
+        prepararReporte();filaListado(id,1,"2026-10-23T05:00:00Z","RECIBIDO","ALTA",1,1);
+        jdbc.update("UPDATE accesible.distritos SET activo=false");jdbc.update("UPDATE accesible.tipos_barrera SET activo=false");
+        assertThat(listado(get("/api/reportes?tipoBarreraId=1&distritoId=1")).get("elementos").size()).isEqualTo(1);
+    }
+    @Test void dualRoleOwnListCannotReadAnotherCitizensReports() throws Exception {
+        prepararReporte();long own=filaListado(id,1,"2026-10-23T05:00:00Z","RECIBIDO","ALTA",1,1);
+        filaListado(otroCiudadano(),2,"2026-10-24T05:00:00Z","RECIBIDO","ALTA",1,1);
+        jdbc.update("INSERT INTO accesible.usuario_roles SELECT ?,id FROM accesible.roles WHERE codigo='ADMINISTRADOR'",id);
+        var page=listado(get("/api/reportes"));
+        assertThat(page.get("elementos").size()).isEqualTo(1);assertThat(page.at("/elementos/0/id").asLong()).isEqualTo(own);
+        assertThat(listado(get("/api/reportes?codigo=ARQ-2026-000002")).get("elementos").size()).isZero();
+    }
+    @Test void suspendedCitizenCannotListReports() throws Exception {
+        prepararReporte();jdbc.update("UPDATE accesible.usuarios SET estado_cuenta='SUSPENDIDA' WHERE id=?",id);
+        mvc.perform(get("/api/reportes").header("Authorization",bearer())).andExpect(status().isForbidden());
+    }
+    @Test void invalidListParametersAreRejected() throws Exception {
+        prepararReporte();
+        for(String query:List.of("limite=0","limite=101","limite=-1","limite=2147483648","limite=",
+                "estado=INVENTADO","severidadDeclarada=EXTREMA","tipoBarreraId=0","distritoId=-1",
+                "desde=no-es-fecha","desde=1999-12-31","desde=2026-10-24&hasta=2026-10-23",
+                "codigo=%25","cursor=no-valido","cursor="+"x".repeat(129),"ciudadanoId="+id,"administrador=true",
+                "sort=ciudadanoId","estado=RECIBIDO&estado=ATENDIDO")) {
+            mvc.perform(get("/api/reportes?"+query).header("Authorization",bearer())).andExpect(status().isBadRequest());
+        }
+        for(String value:List.of("not-a-date|1","2026-10-23T05:00:00Z|-1","2026-10-23T05:00:00Z|999999999999999999999","2026-10-23T05:00:00Z|1|extra")) {
+            String cursor=Base64.getUrlEncoder().withoutPadding().encodeToString(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            mvc.perform(get("/api/reportes").param("cursor",cursor).header("Authorization",bearer())).andExpect(status().isBadRequest());
+        }
+        verifyNoInteractions(storage);
+    }
     MockMultipartFile datos(String body) { return new MockMultipartFile("datos","","application/json",body.getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
     MockMultipartFile foto() throws Exception { return new MockMultipartFile("foto","../../nombre-personal.png","image/png",png()); }
     long crearReporte() throws Exception {

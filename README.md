@@ -12,7 +12,7 @@ Java 21, Spring Boot 3.5.16, Maven Wrapper 3.9.11 y PostgreSQL 17. Implementa **
 - Provisión administrativa mediante operación de BD, con auditoría y atomicidad.
 - Esquema privado `accesible`, RLS y sin acceso al Data API. Migraciones V1 (identidad/catálogos/auditoría) y V2 (vinculación Auth).
 
-HU-01 añade registro y detalle de reportes, fotos privadas, historial inicial, auditoría, catálogos públicos activos y recuperación de archivos huérfanos. No se incluyen listados paginados, cambios de estado, administración HTTP, KPI, IA ni cuadrillas. Catálogos vacíos hasta recibir datos aprobados; solo se siembran CIUDADANO y ADMINISTRADOR. Las pruebas usan catálogos explícitamente ficticios.
+HU-01 añade registro y detalle de reportes, fotos privadas, historial inicial, auditoría, catálogos públicos activos y recuperación de archivos huérfanos. La continuación incorpora el listado paginado de reportes propios con filtros. Quedan pendientes cambios de estado, administración HTTP, KPI, IA y cuadrillas. El piloto usa catálogos internos aprobados mediante V4; las pruebas usan catálogos explícitamente ficticios.
 
 Proyecto Supabase creado por autorización del usuario: [ArequipaAccesible-Backend](https://supabase.com/dashboard/project/kjqzklzswocxbtbqohsc), São Paulo. Se provisionaron 12 tablas privadas, FK de identidad, bucket privado y rol `arequipa_backend` con RLS. Sus credenciales no están en el repositorio. Ver la adopción de Flyway y configuración de HU-01 al final.
 
@@ -183,6 +183,26 @@ Pruebas adicionales: use case/compensación, firmas/decode de imagen, API HTTP d
 .\ops\test-local-postgres.ps1 -Port 55440 -CheckBootstrap
 ```
 
-Siguiente iteración: listados propios paginados, filtros e historial consultable; luego administración/transiciones. La lectura segura de la evidencia se incluyó junto a HU-01 para cerrar el ciclo mínimo del reporte.
+### Listado de reportes propios
+
+`GET /api/reportes` requiere un ciudadano activo y devuelve exclusivamente sus reportes. Una cuenta con roles CIUDADANO y ADMINISTRADOR sigue viendo solo sus propios reportes en este endpoint. El propietario se obtiene del JWT validado y los roles de la base. No se admite seleccionar un ciudadano mediante parámetros.
+
+| Parámetro | Contrato |
+| --- | --- |
+| `limite` | Entero de 1 a 100; predeterminado 20. |
+| `cursor` | Usar `siguienteCursor` de la respuesta anterior, conservando los filtros. Omitirlo para comenzar de nuevo. |
+| `estado` | RECIBIDO, EN_EVALUACION, ASIGNADO, EN_PROCESO, ATENDIDO o RECHAZADO. |
+| `severidadDeclarada` | BAJA, MEDIA o ALTA. |
+| `tipoBarreraId`, `distritoId` | IDs positivos; un ID sin coincidencias devuelve una página vacía. Los reportes históricos siguen consultándose aunque su catálogo esté inactivo. |
+| `desde`, `hasta` | Fechas ISO `AAAA-MM-DD`, inclusivas en America/Lima, entre años 2000 y 9999. `desde` no puede superar a `hasta`. |
+| `codigo` | Código exacto ARQ-AAAA-NNNNNN; admite minúsculas y espacios exteriores. |
+
+Todos los filtros son opcionales y se combinan con AND. Parámetros desconocidos, duplicados o vacíos, cursor inválido y límites fuera de rango devuelven 400. El endpoint no depende de que estén habilitadas nuevas cargas a Storage.
+
+Respuesta 200: `{elementos: [...], limite: 20, hayMas: false, siguienteCursor: null}`. Cada elemento contiene id, codigo, tipoBarreraId, distritoId, severidadDeclarada, descripcion, direccionReferencia, estado y fechaCreacion. El detalle y la evidencia conservan sus endpoints existentes. La respuesta lleva `Cache-Control: no-store`.
+
+La consulta usa parámetros vinculados, propietario obligatorio y orden `fecha_creacion DESC, id DESC`. Solicita como máximo `limite + 1` filas, sin OFFSET, COUNT global ni consultas de fotos por reporte. Reutiliza el índice existente `(ciudadano_id, fecha_creacion DESC)`; no requiere migraciones ni nuevos permisos. El cursor representa una posición y no concede permisos. La paginación evita repetir resultados cuando se insertan nuevos reportes más recientes, pero no constituye una instantánea histórica entre peticiones: cambios de estado o de filtros pueden cambiar las coincidencias. Al cambiar filtros, comenzar sin cursor.
+
+Siguiente iteración: historial consultable; luego administración/transiciones. La lectura segura de la evidencia se incluyó junto a HU-01 para cerrar el ciclo mínimo del reporte.
 
 Referencias: [JWT Supabase](https://supabase.com/docs/guides/auth/jwts), [Resource Server Spring Security 6.5](https://docs.spring.io/spring-security/reference/6.5/servlet/oauth2/resource-server/jwt.html). El [cambio TLS de Supabase](https://supabase.com/changelog/cbc-tls-ciphers-deprecated) requiere clientes modernos; se usa HTTPS de Java 21.

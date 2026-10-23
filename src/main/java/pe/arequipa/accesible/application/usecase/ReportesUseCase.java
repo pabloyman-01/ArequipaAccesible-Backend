@@ -2,6 +2,7 @@ package pe.arequipa.accesible.application.usecase;
 
 import java.time.Clock;
 import java.util.UUID;
+import java.util.List;
 import pe.arequipa.accesible.domain.model.*;
 import pe.arequipa.accesible.domain.port.out.*;
 import static pe.arequipa.accesible.domain.model.ReporteException.Motivo.*;
@@ -53,6 +54,19 @@ public class ReportesUseCase {
         var actor = actor(actorId);
         return reportes.buscar(id,actorId,actor.roles().contains(Rol.ADMINISTRADOR))
                 .orElseThrow(() -> new ReporteException(NO_ENCONTRADO));
+    }
+    public record Pagina(List<ResumenReporte> elementos, int limite, boolean hayMas, ConsultaReportes.Cursor siguiente) {
+        public Pagina { elementos=List.copyOf(elementos); }
+    }
+    public Pagina listarPropios(ConsultaReportes consulta, UUID actorId) {
+        var actor=actor(actorId);
+        if (!actor.roles().contains(Rol.CIUDADANO)) throw new ReporteException(SIN_PERMISO);
+        if (consulta==null) throw new ReporteException(CONSULTA_INVALIDA);
+        var filas=reportes.listarPropios(actorId,consulta);
+        boolean hayMas=filas.size()>consulta.limite();
+        var pagina=List.copyOf(filas.subList(0,Math.min(filas.size(),consulta.limite())));
+        var ultimo=pagina.isEmpty()?null:pagina.getLast();
+        return new Pagina(pagina,consulta.limite(),hayMas,hayMas?new ConsultaReportes.Cursor(ultimo.fechaCreacion(),ultimo.id()):null);
     }
     public record FotoContenido(String mimeType, byte[] contenido) {}
     public FotoContenido foto(long reporteId, long fotoId, UUID actorId) {

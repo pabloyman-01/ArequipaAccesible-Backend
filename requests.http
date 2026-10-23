@@ -50,6 +50,18 @@ Content-Type: image/png
 GET {{baseUrl}}/api/reportes/1
 Authorization: Bearer {{token}}
 
+### Own reports: newest first; date boundaries are inclusive in America/Lima
+GET {{baseUrl}}/api/reportes?limite=20&estado=RECIBIDO&severidadDeclarada=ALTA&desde=2026-10-01&hasta=2026-10-31
+Authorization: Bearer {{token}}
+
+### Own report by exact code; no results if it belongs to another citizen
+GET {{baseUrl}}/api/reportes?codigo=ARQ-2026-000001
+Authorization: Bearer {{token}}
+
+### Next page: replace cursor with siguienteCursor; keep the same filters
+GET {{baseUrl}}/api/reportes?limite=20&cursor=PEGAR_CURSOR_DE_RESPUESTA
+Authorization: Bearer {{token}}
+
 ### Private evidence: use the link from detail
 GET {{baseUrl}}/api/reportes/1/fotos/1
 Authorization: Bearer {{token}}

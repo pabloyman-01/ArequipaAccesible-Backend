@@ -94,6 +94,33 @@ public class JpaReporteAdapter implements ReporteRepositoryPort {
         return new Reporte(r.id,r.codigo,r.ciudadanoId,r.tipoBarreraId,r.distritoId,Severidad.valueOf(r.severidad),
                 r.descripcion,r.direccion,r.latitud,r.longitud,r.estado,r.creado,fotos);
     }
+    @Override @Transactional(readOnly=true)
+    public List<ResumenReporte> listarPropios(UUID actor, ConsultaReportes filtro) {
+        // Owner is mandatory for all callers, including citizens with an admin role.
+        StringBuilder where=new StringBuilder(" WHERE r.ciudadanoId=:actor");
+        Map<String,Object> parametros=new LinkedHashMap<>();
+        parametros.put("actor",actor);
+        if (filtro.estado()!=null) { where.append(" AND r.estado=:estado"); parametros.put("estado",filtro.estado().name()); }
+        if (filtro.severidadDeclarada()!=null) { where.append(" AND r.severidad=:severidad"); parametros.put("severidad",filtro.severidadDeclarada().name()); }
+        if (filtro.tipoBarreraId()!=null) { where.append(" AND r.tipoBarreraId=:tipo"); parametros.put("tipo",filtro.tipoBarreraId()); }
+        if (filtro.distritoId()!=null) { where.append(" AND r.distritoId=:distrito"); parametros.put("distrito",filtro.distritoId()); }
+        if (filtro.codigo()!=null) { where.append(" AND r.codigo=:codigo"); parametros.put("codigo",filtro.codigo()); }
+        if (filtro.desde()!=null) { where.append(" AND r.creado>=:desde"); parametros.put("desde",filtro.desdeInclusivo()); }
+        if (filtro.hasta()!=null) { where.append(" AND r.creado<:hasta"); parametros.put("hasta",filtro.hastaExclusivo()); }
+        if (filtro.cursor()!=null) {
+            // Explicit upper bound lets the existing date index start at the cursor.
+            where.append(" AND r.creado<=:fechaCursor AND (r.creado<:fechaCursor OR r.id<:idCursor)");
+            parametros.put("fechaCursor",filtro.cursor().fecha()); parametros.put("idCursor",filtro.cursor().id());
+        }
+        var query=em.createQuery("""
+            SELECT new pe.arequipa.accesible.domain.model.ResumenReporte(
+                r.id,r.codigo,r.tipoBarreraId,r.distritoId,r.severidad,r.descripcion,r.direccion,r.estado,r.creado)
+            FROM ReporteEntity r
+            """+where+" ORDER BY r.creado DESC,r.id DESC",ResumenReporte.class);
+        parametros.forEach(query::setParameter);
+        // One extra row establishes hayMas; no count query or per-report photo fetch.
+        return query.setMaxResults(filtro.limite()+1).getResultList();
+    }
     @Override public void limpiarCarga(UUID carga, boolean inmediata, Consumer<String> eliminar) {
         String expired = inmediata ? "" : " AND limpiar_despues <= now()";
         var rows = em.createNativeQuery("SELECT object_key FROM accesible.archivo_cargas WHERE id=:id"+expired+" FOR UPDATE")

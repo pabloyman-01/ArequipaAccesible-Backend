@@ -6,7 +6,12 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.DateTimeException;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.util.MultiValueMap;
 import org.springframework.http.*;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -28,6 +33,40 @@ public class ReportesController {
         CrearReporte command() { return new CrearReporte(tipoBarreraId,severidadDeclarada,descripcion,distritoId,direccionReferencia,latitud,longitud); }
     }
     public record Creado(long id, String codigo, String estado, Instant fechaCreacion) {}
+    public record Pagina(List<ResumenReporte> elementos, int limite, boolean hayMas, String siguienteCursor) {}
+    @GetMapping
+    public ResponseEntity<Pagina> propios(@AuthenticationPrincipal Jwt jwt,
+            @RequestParam(defaultValue="20") int limite,
+            @RequestParam(required=false) EstadoReporte estado,
+            @RequestParam(required=false) Severidad severidadDeclarada,
+            @RequestParam(required=false) Long tipoBarreraId,
+            @RequestParam(required=false) Long distritoId,
+            @RequestParam(required=false) @DateTimeFormat(iso=DateTimeFormat.ISO.DATE) LocalDate desde,
+            @RequestParam(required=false) @DateTimeFormat(iso=DateTimeFormat.ISO.DATE) LocalDate hasta,
+            @RequestParam(required=false) String codigo,
+            @RequestParam(required=false) String cursor,
+            @RequestParam MultiValueMap<String,String> parametros) {
+        Set<String> permitidos=Set.of("limite","estado","severidadDeclarada","tipoBarreraId","distritoId","desde","hasta","codigo","cursor");
+        if (parametros.entrySet().stream().anyMatch(p -> !permitidos.contains(p.getKey()) || p.getValue().size()!=1 || p.getValue().getFirst().isBlank())) {
+            throw new ReporteException(CONSULTA_INVALIDA);
+        }
+        var consulta=new ConsultaReportes(limite,estado,tipoBarreraId,distritoId,severidadDeclarada,desde,hasta,codigo,decodificar(cursor));
+        var pagina=reportes.listarPropios(consulta,UUID.fromString(jwt.getSubject()));
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(new Pagina(pagina.elementos(),pagina.limite(),pagina.hayMas(),codificar(pagina.siguiente())));
+    }
+    private static String codificar(ConsultaReportes.Cursor cursor) {
+        return cursor==null?null:Base64.getUrlEncoder().withoutPadding().encodeToString(
+                (cursor.fecha()+"|"+cursor.id()).getBytes(StandardCharsets.UTF_8));
+    }
+    private static ConsultaReportes.Cursor decodificar(String cursor) {
+        if (cursor==null) return null;
+        if (!cursor.matches("[A-Za-z0-9_-]{1,128}")) throw new ReporteException(CONSULTA_INVALIDA);
+        try {
+            String[] partes=new String(Base64.getUrlDecoder().decode(cursor),StandardCharsets.UTF_8).split("\\|",-1);
+            if (partes.length!=2) throw new ReporteException(CONSULTA_INVALIDA);
+            return new ConsultaReportes.Cursor(Instant.parse(partes[0]),Long.parseLong(partes[1]));
+        } catch (IllegalArgumentException | DateTimeException e) { throw new ReporteException(CONSULTA_INVALIDA); }
+    }
     public record FotoRespuesta(long id, String mimeType, long tamanoBytes, String enlace) {}
     public record Detalle(long id, String codigo, long tipoBarreraId, long distritoId, Severidad severidadDeclarada,
             String descripcion, String direccionReferencia, BigDecimal latitud, BigDecimal longitud,

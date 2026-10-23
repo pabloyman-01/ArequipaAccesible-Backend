@@ -32,6 +32,27 @@ class ReportesUseCaseTest {
         citizen(); when(images.validar(any(),any())).thenReturn(new ImagenValidada(new byte[]{1},"image/png","png"));
         when(repo.reservarCarga(eq(id),anyString(),eq(5))).thenReturn(pending);
     }
+    @Test void listWorksWhenNewUploadsAreDisabled() {
+        citizen();var query=new ConsultaReportes(20,null,null,null,null,null,null,null,null);
+        var disabled=new ReportesUseCase(usuarios,repo,storage,images,new AreaPermitida(null,null,null,null),Clock.systemUTC(),false,5);
+        when(repo.listarPropios(id,query)).thenReturn(List.of());
+        assertThat(disabled.listarPropios(query,id).elementos()).isEmpty();
+        verifyNoInteractions(storage,images);
+    }
+    @Test void listRechecksActiveCitizenInApplicationLayer() {
+        when(usuarios.buscar(id)).thenReturn(Optional.of(new UsuarioPerfil(id,"Ana","Test","DNI","00000000","test@example.test",null,null,"SUSPENDIDA","NO_VERIFICADO",Instant.now(),Set.of(Rol.CIUDADANO))));
+        var query=new ConsultaReportes(20,null,null,null,null,null,null,null,null);
+        assertThatThrownBy(()->service.listarPropios(query,id)).isInstanceOfSatisfying(ReporteException.class,
+                e->assertThat(e.motivo()).isEqualTo(ReporteException.Motivo.SIN_PERMISO));
+        verifyNoInteractions(repo,storage,images);
+    }
+    @Test void adminWithoutCitizenCannotListThroughApplicationLayer() {
+        when(usuarios.buscar(id)).thenReturn(Optional.of(new UsuarioPerfil(id,"Ana","Test","DNI","00000000","test@example.test",null,null,"ACTIVA","NO_VERIFICADO",Instant.now(),Set.of(Rol.ADMINISTRADOR))));
+        var query=new ConsultaReportes(20,null,null,null,null,null,null,null,null);
+        assertThatThrownBy(()->service.listarPropios(query,id)).isInstanceOfSatisfying(ReporteException.class,
+                e->assertThat(e.motivo()).isEqualTo(ReporteException.Motivo.SIN_PERMISO));
+        verifyNoInteractions(repo,storage,images);
+    }
     @Test void invalidBusinessDataNeverUploads() {
         citizen(); var bad=new CrearReporte(1L,Severidad.ALTA," ",1L,"Test",input.latitud(),input.longitud());
         assertThatThrownBy(() -> service.crear(bad,new byte[]{1},"image/png",id)).isInstanceOf(ReporteException.class);
