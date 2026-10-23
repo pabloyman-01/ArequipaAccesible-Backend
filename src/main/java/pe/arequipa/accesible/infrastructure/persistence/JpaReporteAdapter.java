@@ -113,10 +113,17 @@ public class JpaReporteAdapter implements ReporteRepositoryPort {
     }
     @Override @Transactional(readOnly=true)
     public List<ResumenReporte> listarPropios(UUID actor, ConsultaReportes filtro) {
-        // Owner is mandatory for all callers, including citizens with an admin role.
-        StringBuilder where=new StringBuilder(" WHERE r.ciudadanoId=:actor");
+        return listar(Objects.requireNonNull(actor),filtro);
+    }
+    @Override @Transactional(readOnly=true)
+    public List<ResumenReporte> listarAdministracion(UUID ciudadano, ConsultaReportes filtro) {
+        return listar(ciudadano,filtro);
+    }
+    private List<ResumenReporte> listar(UUID actor, ConsultaReportes filtro) {
+        // Own-list callers supply a non-null owner; only the administrative use case may omit it.
+        StringBuilder where=new StringBuilder(" WHERE 1=1");
         Map<String,Object> parametros=new LinkedHashMap<>();
-        parametros.put("actor",actor);
+        if (actor!=null) { where.append(" AND r.ciudadanoId=:actor");parametros.put("actor",actor); }
         if (filtro.estado()!=null) { where.append(" AND r.estado=:estado"); parametros.put("estado",filtro.estado().name()); }
         if (filtro.severidadDeclarada()!=null) { where.append(" AND r.severidad=:severidad"); parametros.put("severidad",filtro.severidadDeclarada().name()); }
         if (filtro.tipoBarreraId()!=null) { where.append(" AND r.tipoBarreraId=:tipo"); parametros.put("tipo",filtro.tipoBarreraId()); }

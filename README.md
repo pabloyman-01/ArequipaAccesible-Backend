@@ -1,6 +1,6 @@
 # ArequipaAccesible-Backend
 
-Java 21, Spring Boot 3.5.16, Maven Wrapper 3.9.11 y PostgreSQL 17. Implementa **iteraciones 0, 1 y 2 (HU-01)** de la guía técnica del 22/10/2026. Reutiliza la base de identidad existente. Ramas: `feat/iteraciones-0-1` y `feat/hu-01`.
+Java 21, Spring Boot 3.5.16, Maven Wrapper 3.9.11 y PostgreSQL 17. Implementa la base, identidad, HU-01, consulta ciudadana y administración de reportes/cuentas de la guía técnica del 22/10/2026. Reutiliza el esquema existente. Los cambios se entregan en ramas `feat/`, incluida `feat/administracion` para el bloque administrativo.
 
 ## Implementado
 
@@ -12,7 +12,7 @@ Java 21, Spring Boot 3.5.16, Maven Wrapper 3.9.11 y PostgreSQL 17. Implementa **
 - Provisión administrativa mediante operación de BD, con auditoría y atomicidad.
 - Esquema privado `accesible`, RLS y sin acceso al Data API. Migraciones V1 (identidad/catálogos/auditoría) y V2 (vinculación Auth).
 
-HU-01 añade registro y detalle de reportes, fotos privadas, historial inicial, auditoría, catálogos públicos activos y recuperación de archivos huérfanos. La continuación incorpora el listado paginado de reportes propios con filtros y la consulta del historial por propietario o administrador. Quedan pendientes cambios de estado, administración HTTP, KPI, IA y cuadrillas. El piloto usa catálogos internos aprobados mediante V4; las pruebas usan catálogos explícitamente ficticios.
+HU-01 añade registro y detalle de reportes, fotos privadas, historial inicial, auditoría, catálogos públicos activos y recuperación de archivos huérfanos. Las continuaciones incorporan listado propio con filtros, historial y administración de reportes/cuentas con auditoría. Quedan pendientes KPI, IA, cuadrillas e integraciones oficiales. El piloto usa catálogos internos aprobados mediante V4; las pruebas usan catálogos explícitamente ficticios.
 
 Proyecto Supabase creado por autorización del usuario: [ArequipaAccesible-Backend](https://supabase.com/dashboard/project/kjqzklzswocxbtbqohsc), São Paulo. Se provisionaron 12 tablas privadas, FK de identidad, bucket privado y rol `arequipa_backend` con RLS. Sus credenciales no están en el repositorio. Ver la adopción de Flyway y configuración de HU-01 al final.
 
@@ -79,7 +79,7 @@ El script concede solo operaciones de identidad/HU-01 necesarias con políticas 
 
 PUT es una extensión necesaria para el alta confiable: requiere nombres/apellidos, tipoDocumento (DNI/CE/PASAPORTE) y documento; teléfono/distrito opcionales. DNI: ocho dígitos. UUID/email vienen del JWT firmado. Reintentar el mismo UUID devuelve el perfil existente sin sobrescribirlo, incluso con concurrencia. Usuario y rol se insertan en una transacción; conflicto de documento/email devuelve 409 sin datos parciales. Si Auth se creó pero el perfil falló, reintentar PUT: no se borra automáticamente la cuenta Auth.
 
-PATCH conserva campos null/omitidos y no permite modificar UUID, email, documento, estado, verificación o roles. JSON con propiedades desconocidas se rechaza. No hay ruta de perfiles ajenos. `/api/admin/**` ya exige ADMINISTRADOR, pero los controladores pertenecen a iteración 4: ciudadano recibe 403; administrador 404 hasta implementarlos.
+PATCH conserva campos null/omitidos y no permite modificar UUID, email, documento, estado, verificación o roles. JSON con propiedades desconocidas se rechaza. No hay edición de datos de identidad ajenos por HTTP. `/api/admin/**` exige ADMINISTRADOR activo y ofrece los controladores administrativos descritos al final; ciudadano recibe 403.
 
 Errores JSON uniformes: timestamp, status, code, message, details y traceId. 400 JSON/DTO, 401 JWT ausente/inválido, 403 suspensión/permisos, 404 inexistente, 409 conflicto, 415 formato y 422 distrito inválido. CORS se rechaza antes del controlador. No se devuelven errores SQL/tokens/DNI completo; se desactivan logs SQL de errores/bindings que puedan incluir datos personales.
 
@@ -95,7 +95,7 @@ Errores JSON uniformes: timestamp, status, code, message, details y traceId. 400
 psql -v actor_id=UUID_OPERADOR_REAL -v usuario_id=UUID_DESTINO_REAL -v motivo="Alta autorizada por el responsable" -f ops/provision-admin.sql
 ```
 
-Actor y destino deben tener perfiles activos. En bootstrap se permite el UUID del propio responsable como actor/destino, bajo control del operador de BD. La autorización procede de acceso operativo a BD. El script bloquea perfiles, concede rol y registra actor/destino/motivo/usuario de BD/fecha en la misma transacción. Reintentos no duplican auditoría. Permisos visibles en la siguiente petición sin renovar JWT. La administración HTTP y su auditoría quedan para iteración 4.
+Actor y destino deben tener perfiles activos. En bootstrap se permite el UUID del propio responsable como actor/destino, bajo control del operador de BD. La autorización procede de acceso operativo a BD. El script bloquea perfiles, concede rol y registra actor/destino/motivo/usuario de BD/fecha en la misma transacción. Reintentos no duplican auditoría. Permisos visibles en la siguiente petición sin renovar JWT. La concesión de roles sigue siendo una operación del propietario de BD; no existe autorregistro ni endpoint HTTP para elevar roles.
 
 Un JWT emitido sigue siendo válido hasta expirar tras logout: esta fase verifica firma/claims y estado persistido, no revocación estricta por sesión. Definir validación contra sesiones/Auth y política de expiración si se necesita. Definir consentimiento, retención y responsables de datos antes de producción.
 
@@ -209,8 +209,40 @@ La consulta usa parámetros vinculados, propietario obligatorio y orden `fecha_c
 
 Devuelve un arreglo con `id`, `estadoAnterior`, `estadoNuevo`, `fechaCambio` y `motivo`, ordenado por `fechaCambio ASC, id ASC`. Las fechas son instantes ISO en UTC. En el evento inicial RECIBIDO, estadoAnterior y motivo pueden ser null. Un reporte existente sin eventos devuelve 200 con `[]`. La respuesta lleva `Cache-Control: no-store` y no expone UUID, nombres ni documento del actor, datos de auditoría o claves de fotos.
 
-Se reutilizan la tabla `historial_estados`, el índice por reporte/fecha y los permisos SELECT existentes. La autorización se verifica antes de consultar los eventos y también se aplica en su consulta. No se consultan fotos ni Storage y no se requiere migración. El historial permanece disponible si se deshabilitan nuevas cargas. Este endpoint es de lectura: las transiciones y la escritura de motivos se implementarán en el bloque administrativo; las pruebas de varios estados usan fixtures exclusivamente en la base desechable.
+Se reutilizan la tabla `historial_estados`, el índice por reporte/fecha y los permisos SELECT existentes. La autorización se verifica antes de consultar los eventos y también se aplica en su consulta. No se consultan fotos ni Storage y no se requiere migración. El historial permanece disponible si se deshabilitan nuevas cargas. Este endpoint es de lectura; las transiciones se realizan mediante el endpoint administrativo.
 
-Siguiente iteración: administración y transiciones de estado. La lectura segura de la evidencia se incluyó junto a HU-01 para cerrar el ciclo mínimo del reporte.
+### Administración
+
+Todos los endpoints siguientes requieren un ADMINISTRADOR activo. El actor y sus permisos se obtienen del JWT y de PostgreSQL; los campos desconocidos en JSON se rechazan.
+
+| Endpoint | Contrato |
+| --- | --- |
+| GET `/api/admin/reportes` | Listado global con los filtros y cursores del listado propio, más `ciudadanoId` UUID opcional. La colección `/api/reportes` continúa limitada al propietario. |
+| PATCH `/api/admin/reportes/{id}/estado` | JSON `{estadoEsperado, nuevoEstado, motivo}`; los dos estados son obligatorios. Devuelve id, codigo, estado y fechaActualizacion. |
+| GET `/api/admin/usuarios` | `limite` 1..100 (20 por defecto), `cursor` UUID de la respuesta anterior, `estadoCuenta`, `rol` y `distritoId` opcionales. Orden por UUID ascendente y respuesta elementos/limite/hayMas/siguienteCursor. Documento enmascarado; no publica el documento completo. |
+| PATCH `/api/admin/usuarios/{id}/estado` | JSON `{estadoEsperado, nuevoEstado, motivo}`. Estados ACTIVA/SUSPENDIDA y motivo no vacío de hasta 500 caracteres. Devuelve id y estadoCuenta. |
+
+Respuestas con `Cache-Control: no-store`. Los parámetros de listado desconocidos, vacíos o duplicados y los formatos inválidos devuelven 400. El listado de usuarios agrupa los roles en una consulta adicional por página, sin una consulta por cada usuario.
+
+Transiciones permitidas en este MVP sin cuadrillas:
+
+| Origen | Destino |
+| --- | --- |
+| RECIBIDO | EN_EVALUACION |
+| EN_EVALUACION | EN_PROCESO o RECHAZADO |
+| ASIGNADO existente | EN_PROCESO |
+| EN_PROCESO | ATENDIDO |
+
+RECHAZADO exige motivo no vacío de hasta 500 caracteres; en otros cambios el motivo es opcional, con el mismo máximo. No se permite entrar en ASIGNADO mientras no exista la asignación formal de cuadrillas. ATENDIDO y RECHAZADO son terminales y permanecen consultables. ATENDIDO no exige una fotografía adicional: la guía lo condiciona a una política del equipo que aún no se ha definido; no se fingen resoluciones ni certificaciones oficiales.
+
+Un estado esperado desactualizado devuelve 409, al igual que una transición inválida. Cada cambio bloquea el reporte y vuelve a comprobar el administrador dentro de la transacción; actualiza estado/fecha, añade historial y auditoría atómicamente. El timestamp se toma después del bloqueo y no retrocede respecto de la fecha previa. Un fallo al registrar historial o auditoría revierte el estado. No se llama a Storage.
+
+Suspender una cuenta afecta a su siguiente petición sin renovar JWT. No se permite la autosuspensión del administrador. Los cambios de cuentas se serializan y bloquean los perfiles en orden, para evitar que dos administradores se suspendan mutuamente y dejen la aplicación sin acceso administrativo. Repetir el estado actual con estadoEsperado correcto no genera otra auditoría; una versión desactualizada devuelve 409.
+
+`ops/configure-runtime-role.sql` configura los permisos operativos: solo añade UPDATE de estado/fecha del reporte y estado_cuenta del usuario. Las políticas RLS administrativas comprueban un administrador activo y `app.actor_id`, establecido por el servidor exclusivamente dentro de la transacción (`set_config(...,true)`). El contexto se elimina al finalizar; no proviene del cliente. No se concede UPDATE de roles, de documento, de propietario ni DELETE. Mantener el rol servidor fuera del cliente.
+
+No hay tablas ni columnas nuevas: Flyway permanece en V4. Los permisos y políticas se gestionan con el script operativo idempotente, que debe ejecutar el propietario de la base tras revisar el cambio. Las pruebas aplican el mismo script a un rol restringido en PostgreSQL desechable. Conceder ADMINISTRADOR a una cuenta real requiere que el propietario identifique expresamente al responsable.
+
+Siguiente iteración: indicadores reales del dashboard y filtros temporales. Cuadrillas, asignaciones e integraciones oficiales siguen fuera de este bloque.
 
 Referencias: [JWT Supabase](https://supabase.com/docs/guides/auth/jwts), [Resource Server Spring Security 6.5](https://docs.spring.io/spring-security/reference/6.5/servlet/oauth2/resource-server/jwt.html). El [cambio TLS de Supabase](https://supabase.com/changelog/cbc-tls-ciphers-deprecated) requiere clientes modernos; se usa HTTPS de Java 21.

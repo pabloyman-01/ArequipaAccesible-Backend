@@ -54,11 +54,11 @@ public class ReportesController {
         var pagina=reportes.listarPropios(consulta,UUID.fromString(jwt.getSubject()));
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(new Pagina(pagina.elementos(),pagina.limite(),pagina.hayMas(),codificar(pagina.siguiente())));
     }
-    private static String codificar(ConsultaReportes.Cursor cursor) {
+    static String codificar(ConsultaReportes.Cursor cursor) {
         return cursor==null?null:Base64.getUrlEncoder().withoutPadding().encodeToString(
                 (cursor.fecha()+"|"+cursor.id()).getBytes(StandardCharsets.UTF_8));
     }
-    private static ConsultaReportes.Cursor decodificar(String cursor) {
+    static ConsultaReportes.Cursor decodificar(String cursor) {
         if (cursor==null) return null;
         if (!cursor.matches("[A-Za-z0-9_-]{1,128}")) throw new ReporteException(CONSULTA_INVALIDA);
         try {

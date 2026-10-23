@@ -67,7 +67,9 @@ public class ReportesUseCase {
         var actor=actor(actorId);
         if (!actor.roles().contains(Rol.CIUDADANO)) throw new ReporteException(SIN_PERMISO);
         if (consulta==null) throw new ReporteException(CONSULTA_INVALIDA);
-        var filas=reportes.listarPropios(actorId,consulta);
+        return paginar(reportes.listarPropios(actorId,consulta),consulta);
+    }
+    public static Pagina paginar(List<ResumenReporte> filas, ConsultaReportes consulta) {
         boolean hayMas=filas.size()>consulta.limite();
         var pagina=List.copyOf(filas.subList(0,Math.min(filas.size(),consulta.limite())));
         var ultimo=pagina.isEmpty()?null:pagina.getLast();

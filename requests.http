@@ -69,3 +69,25 @@ Authorization: Bearer {{token}}
 ### Chronological report history: owner or administrator; same 404 for foreign/missing reports
 GET {{baseUrl}}/api/reportes/1/historial
 Authorization: Bearer {{token}}
+
+### Administrative global collection; requires a real provisioned administrator
+GET {{baseUrl}}/api/admin/reportes?limite=20&estado=RECIBIDO
+Authorization: Bearer {{token}}
+
+### Start evaluation; reload current state before retrying after 409
+PATCH {{baseUrl}}/api/admin/reportes/1/estado
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"estadoEsperado":"RECIBIDO","nuevoEstado":"EN_EVALUACION","motivo":"Inicio de revisión del reporte"}
+
+### Admin user directory; masked document
+GET {{baseUrl}}/api/admin/usuarios?limite=20&estadoCuenta=ACTIVA
+Authorization: Bearer {{token}}
+
+### Account state: replace UUID with an actual user from the directory; never suspend yourself
+PATCH {{baseUrl}}/api/admin/usuarios/REEMPLAZAR_UUID/estado
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"estadoEsperado":"ACTIVA","nuevoEstado":"SUSPENDIDA","motivo":"Revisión interna autorizada por el responsable"}

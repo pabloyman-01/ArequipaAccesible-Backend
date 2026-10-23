@@ -37,7 +37,7 @@ DROP POLICY IF EXISTS backend_read ON accesible.distritos;
 CREATE POLICY backend_read ON accesible.distritos FOR SELECT TO :"runtime_role" USING (true);
 DROP POLICY IF EXISTS backend_read ON accesible.tipos_barrera;
 CREATE POLICY backend_read ON accesible.tipos_barrera FOR SELECT TO :"runtime_role" USING (true);
--- HU-01: server-side access only, never anon/authenticated. No UPDATE/DELETE on reports.
+-- HU-01: server-side access only, never anon/authenticated. Administration grants follow below.
 GRANT SELECT, INSERT ON accesible.reportes, accesible.reporte_fotos, accesible.historial_estados TO :"runtime_role";
 GRANT INSERT ON accesible.auditoria TO :"runtime_role";
 GRANT SELECT, INSERT, UPDATE ON accesible.contadores_reporte, accesible.reporte_limites TO :"runtime_role";
@@ -66,4 +66,35 @@ DROP POLICY IF EXISTS backend_access ON accesible.reporte_limites;
 CREATE POLICY backend_access ON accesible.reporte_limites TO :"runtime_role" USING (true) WITH CHECK (true);
 DROP POLICY IF EXISTS backend_access ON accesible.archivo_cargas;
 CREATE POLICY backend_access ON accesible.archivo_cargas TO :"runtime_role" USING (true) WITH CHECK (true);
+-- Administration: only these columns can change; no role grants or deletion.
+GRANT UPDATE(estado,fecha_actualizacion) ON accesible.reportes TO :"runtime_role";
+GRANT UPDATE(estado_cuenta) ON accesible.usuarios TO :"runtime_role";
+DO $admin$
+DECLARE runtime_name text;
+admin_check text := $check$EXISTS (
+  SELECT 1 FROM accesible.usuarios au
+  JOIN accesible.usuario_roles aur ON aur.usuario_id=au.id
+  JOIN accesible.roles ar ON ar.id=aur.rol_id
+  WHERE au.id=NULLIF(current_setting('app.actor_id',true),'')::uuid
+    AND au.estado_cuenta='ACTIVA' AND ar.codigo='ADMINISTRADOR'
+)$check$;
+BEGIN
+  SELECT name INTO runtime_name FROM runtime_input;
+  EXECUTE format('DROP POLICY IF EXISTS backend_admin_update ON accesible.reportes');
+  EXECUTE format('CREATE POLICY backend_admin_update ON accesible.reportes FOR UPDATE TO %I USING (%s) WITH CHECK (%s)',runtime_name,admin_check,admin_check);
+  EXECUTE format('DROP POLICY IF EXISTS backend_admin_update ON accesible.usuarios');
+  EXECUTE format('CREATE POLICY backend_admin_update ON accesible.usuarios FOR UPDATE TO %I USING (%s) WITH CHECK (%s)',runtime_name,admin_check,admin_check);
+  EXECUTE format('DROP POLICY IF EXISTS backend_admin_history ON accesible.historial_estados');
+  EXECUTE format($policy$CREATE POLICY backend_admin_history ON accesible.historial_estados FOR INSERT TO %I WITH CHECK (
+    %s AND actor_id=NULLIF(current_setting('app.actor_id',true),'')::uuid
+    AND (estado_anterior,estado_nuevo) IN (
+      ('RECIBIDO','EN_EVALUACION'),('EN_EVALUACION','EN_PROCESO'),('EN_EVALUACION','RECHAZADO'),
+      ('ASIGNADO','EN_PROCESO'),('EN_PROCESO','ATENDIDO'))
+    AND (estado_nuevo<>'RECHAZADO' OR NULLIF(btrim(motivo),'') IS NOT NULL))$policy$,runtime_name,admin_check);
+  EXECUTE format('DROP POLICY IF EXISTS backend_admin_audit ON accesible.auditoria');
+  EXECUTE format($policy$CREATE POLICY backend_admin_audit ON accesible.auditoria FOR INSERT TO %I WITH CHECK (
+    %s AND actor_id=NULLIF(current_setting('app.actor_id',true),'')::uuid AND (
+      (accion='CAMBIAR_ESTADO_REPORTE' AND entidad='reportes') OR
+      (accion='CAMBIAR_ESTADO_USUARIO' AND entidad='usuarios')))$policy$,runtime_name,admin_check);
+END $admin$;
 COMMIT;

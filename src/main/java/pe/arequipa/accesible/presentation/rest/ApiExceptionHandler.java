@@ -13,6 +13,7 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.security.access.AccessDeniedException;
 import pe.arequipa.accesible.domain.model.PerfilException;
 import pe.arequipa.accesible.domain.model.ReporteException;
+import pe.arequipa.accesible.domain.model.AdministracionException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.multipart.MultipartException;
@@ -21,6 +22,17 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 @RestControllerAdvice
 public class ApiExceptionHandler {
     private static final Logger LOG = LoggerFactory.getLogger(ApiExceptionHandler.class);
+    @ExceptionHandler(AdministracionException.class)
+    ResponseEntity<ApiError> administracion(AdministracionException e) {
+        return switch(e.motivo()) {
+            case SIN_PERMISO -> error(403,"ACCESO_DENEGADO","Se requiere un administrador activo");
+            case NO_ENCONTRADO -> error(404,"NO_ENCONTRADO","Recurso no encontrado");
+            case TRANSICION_INVALIDA -> error(409,"TRANSICION_INVALIDA","La transición solicitada no está permitida");
+            case ESTADO_CONFLICTO -> error(409,"ESTADO_CONFLICTO","El estado cambió o la operación dejaría sin acceso al administrador");
+            case MOTIVO_INVALIDO -> error(422,"MOTIVO_INVALIDO","Se requiere un motivo válido de hasta 500 caracteres");
+            case CONSULTA_INVALIDA -> error(400,"FILTROS_INVALIDOS","Revise filtros, límite y cursor");
+        };
+    }
     @ExceptionHandler(ReporteException.class)
     ResponseEntity<ApiError> reporte(ReporteException e) {
         return switch(e.motivo()) {
@@ -61,6 +73,7 @@ public class ApiExceptionHandler {
     ResponseEntity<ApiError> json() { return error(400,"JSON_INVALIDO","JSON incorrecto o campos no permitidos"); }
     @ExceptionHandler(DataIntegrityViolationException.class)
     ResponseEntity<ApiError> conflicto(jakarta.servlet.http.HttpServletRequest request) {
+        if(request.getRequestURI().startsWith("/api/admin"))return error(409,"ADMINISTRACION_CONFLICTO","No se pudo confirmar la operación administrativa");
         return request.getRequestURI().startsWith("/api/reportes")
                 ? error(409,"REPORTE_CONFLICTO","No se pudo confirmar el reporte")
                 : error(409,"PERFIL_CONFLICTO","Los datos del perfil presentan un conflicto");

@@ -78,6 +78,7 @@ class PostgresIntegrationTest {
     @MockitoBean JwtDecoder decoder;
     @MockitoBean ArchivoStoragePort storage;
     @Autowired ReporteRepositoryPort reportes;
+    @Autowired AdministracionRepositoryPort administracion;
     @Autowired LimpiezaArchivos limpieza;
     @Autowired ObjectMapper json;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
@@ -155,8 +156,7 @@ class PostgresIntegrationTest {
         registrar();
         mvc.perform(get("/api/admin/usuarios").header("Authorization",bearer())).andExpect(status().isForbidden());
         jdbc.update("INSERT INTO accesible.usuario_roles SELECT ?,id FROM accesible.roles WHERE codigo='ADMINISTRADOR'",id);
-        // Admin API itself belongs to iteration 4, so authorized access still returns 404.
-        mvc.perform(get("/api/admin/usuarios").header("Authorization",bearer())).andExpect(status().isNotFound());
+        mvc.perform(get("/api/admin/usuarios").header("Authorization",bearer())).andExpect(status().isOk());
         jdbc.update("DELETE FROM accesible.usuario_roles WHERE usuario_id=? AND rol_id=(SELECT id FROM accesible.roles WHERE codigo='ADMINISTRADOR')",id);
         mvc.perform(get("/api/admin/usuarios").header("Authorization",bearer())).andExpect(status().isForbidden());
     }
@@ -384,6 +384,143 @@ class PostgresIntegrationTest {
             INSERT INTO accesible.historial_estados(reporte_id,estado_anterior,estado_nuevo,motivo,actor_id,fecha_cambio)
             VALUES (?,?,?,?,?,?::timestamptz) RETURNING id
             """,Long.class,reporte,anterior,nuevo,motivo,id,fecha);
+    }
+    void admin(UUID user) { jdbc.update("INSERT INTO accesible.usuario_roles SELECT ?,id FROM accesible.roles WHERE codigo='ADMINISTRADOR' ON CONFLICT DO NOTHING",user); }
+    String cambio(String anterior,String nuevo,String motivo) {
+        return "{\"estadoEsperado\":\""+anterior+"\",\"nuevoEstado\":\""+nuevo+"\",\"motivo\":"+(motivo==null?"null":"\""+motivo+"\"")+"}";
+    }
+    org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder patchAdmin(long report,String anterior,String nuevo,String motivo) {
+        return patch("/api/admin/reportes/"+report+"/estado").header("Authorization",bearer()).contentType("application/json").content(cambio(anterior,nuevo,motivo));
+    }
+    @Test void administratorListsAllReportsButCitizenCollectionRemainsOwn() throws Exception {
+        prepararReporte();admin(id);UUID other=otroCiudadano();
+        filaListado(id,1,"2026-10-23T05:00:00Z","RECIBIDO","ALTA",1,1);
+        long foreign=filaListado(other,2,"2026-10-24T05:00:00Z","EN_PROCESO","BAJA",1,1);
+        var result=mvc.perform(get("/api/admin/reportes?limite=1").header("Authorization",bearer())).andExpect(status().isOk()).andReturn();
+        var page=json.readTree(result.getResponse().getContentAsString());
+        assertThat(page.at("/elementos/0/id").asLong()).isEqualTo(foreign);assertThat(page.get("hayMas").asBoolean()).isTrue();
+        mvc.perform(get("/api/admin/reportes").param("cursor",page.get("siguienteCursor").asText()).header("Authorization",bearer()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.elementos.length()").value(1));
+        mvc.perform(get("/api/admin/reportes?ciudadanoId="+other+"&estado=EN_PROCESO&severidadDeclarada=BAJA&tipoBarreraId=1&distritoId=1&desde=2026-10-24&hasta=2026-10-24&codigo=ARQ-2026-000002")
+                .header("Authorization",bearer())).andExpect(status().isOk()).andExpect(jsonPath("$.elementos.length()").value(1));
+        assertThat(listado(get("/api/reportes")).get("elementos").size()).isEqualTo(1);
+    }
+    @Test void administrativeEndpointsRejectCitizensAndMissingSessions() throws Exception {
+        prepararReporte();
+        for(String path:List.of("/api/admin/reportes","/api/admin/usuarios")){
+            mvc.perform(get(path)).andExpect(status().isUnauthorized());
+            mvc.perform(get(path).header("Authorization",bearer())).andExpect(status().isForbidden());
+        }
+        mvc.perform(patchAdmin(1,"RECIBIDO","EN_EVALUACION",null)).andExpect(status().isForbidden());
+        mvc.perform(patch("/api/admin/usuarios/"+id+"/estado").header("Authorization",bearer()).contentType("application/json").content(cambio("ACTIVA","SUSPENDIDA","Prueba"))).andExpect(status().isForbidden());
+    }
+    @Test void transitionsPersistStateHistoryAndAuditAndRejectStaleRequests() throws Exception {
+        prepararReporte();admin(id);long report=crearReporte();
+        for(var pair:List.of(new String[]{"RECIBIDO","EN_EVALUACION"},new String[]{"EN_EVALUACION","EN_PROCESO"},new String[]{"EN_PROCESO","ATENDIDO"}))
+            mvc.perform(patchAdmin(report,pair[0],pair[1],"Seguimiento técnico")).andExpect(status().isOk()).andExpect(jsonPath("$.estado").value(pair[1]));
+        assertThat(jdbc.queryForObject("SELECT estado FROM accesible.reportes WHERE id=?",String.class,report)).isEqualTo("ATENDIDO");
+        assertThat(count("historial_estados")).isEqualTo(4);assertThat(count("auditoria")).isEqualTo(4);
+        mvc.perform(patchAdmin(report,"EN_PROCESO","ATENDIDO",null)).andExpect(status().isConflict());
+        mvc.perform(patchAdmin(report,"ATENDIDO","EN_PROCESO",null)).andExpect(status().isConflict());
+        mvc.perform(get("/api/reportes/"+report+"/historial").header("Authorization",bearer())).andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(4));
+    }
+    @Test void rejectionValidationAndNoCrewAssignmentDoNotChangeData() throws Exception {
+        prepararReporte();admin(id);long report=filaListado(id,1,"2026-10-23T05:00:00Z","EN_EVALUACION","ALTA",1,1);
+        mvc.perform(patchAdmin(report,"EN_EVALUACION","ASIGNADO",null)).andExpect(status().isConflict());
+        mvc.perform(patchAdmin(report,"EN_EVALUACION","RECHAZADO","  ")).andExpect(status().isUnprocessableEntity());
+        mvc.perform(patchAdmin(report,"EN_EVALUACION","RECHAZADO","x".repeat(501))).andExpect(status().isUnprocessableEntity());
+        assertThat(count("historial_estados")).isZero();assertThat(count("auditoria")).isZero();
+        mvc.perform(patchAdmin(report,"EN_EVALUACION","RECHAZADO"," Fuera del alcance del piloto ")).andExpect(status().isOk());
+        assertThat(jdbc.queryForObject("SELECT motivo FROM accesible.historial_estados",String.class)).isEqualTo("Fuera del alcance del piloto");
+        mvc.perform(patchAdmin(report,"RECHAZADO","EN_EVALUACION","Prueba")).andExpect(status().isConflict());
+    }
+    @Test void concurrentTransitionsHaveOneWinnerAndOneHistoryEntry() throws Exception {
+        prepararReporte();admin(id);long report=filaListado(id,1,"2026-10-23T05:00:00Z","RECIBIDO","ALTA",1,1);
+        var pool=Executors.newFixedThreadPool(2);var start=new CountDownLatch(1);
+        try {
+            Callable<Integer> call=()->{start.await();return mvc.perform(patchAdmin(report,"RECIBIDO","EN_EVALUACION",null)).andReturn().getResponse().getStatus();};
+            var a=pool.submit(call);var b=pool.submit(call);start.countDown();
+            assertThat(List.of(a.get(15,TimeUnit.SECONDS),b.get(15,TimeUnit.SECONDS))).containsExactlyInAnyOrder(200,409);
+        } finally {pool.shutdownNow();}
+        assertThat(count("historial_estados")).isEqualTo(1);assertThat(count("auditoria")).isEqualTo(1);
+    }
+    @Test void auditFailureRollsBackReportStateAndHistory() throws Exception {
+        prepararReporte();admin(id);long report=filaListado(id,1,"2026-10-23T05:00:00Z","RECIBIDO","ALTA",1,1);
+        jdbc.execute("ALTER TABLE accesible.auditoria ADD CONSTRAINT test_admin_failure CHECK (accion<>'CAMBIAR_ESTADO_REPORTE')");
+        try {mvc.perform(patchAdmin(report,"RECIBIDO","EN_EVALUACION",null)).andExpect(status().isConflict());}
+        finally {jdbc.execute("ALTER TABLE accesible.auditoria DROP CONSTRAINT test_admin_failure");}
+        assertThat(jdbc.queryForObject("SELECT estado FROM accesible.reportes WHERE id=?",String.class,report)).isEqualTo("RECIBIDO");
+        assertThat(count("historial_estados")).isZero();assertThat(count("auditoria")).isZero();
+    }
+    @Test void adminUserListIsPagedFilteredAndMasksDocuments() throws Exception {
+        prepararReporte();admin(id);UUID other=otroCiudadano();
+        var first=mvc.perform(get("/api/admin/usuarios?limite=1").header("Authorization",bearer())).andExpect(status().isOk()).andExpect(header().string("Cache-Control","no-store")).andReturn();
+        var page=json.readTree(first.getResponse().getContentAsString());assertThat(page.get("hayMas").asBoolean()).isTrue();
+        var next=mvc.perform(get("/api/admin/usuarios?limite=1&cursor="+page.get("siguienteCursor").asText()).header("Authorization",bearer())).andExpect(status().isOk()).andReturn();
+        var nextPage=json.readTree(next.getResponse().getContentAsString());
+        assertThat(nextPage.at("/elementos/0/id").asText()).isNotEqualTo(page.at("/elementos/0/id").asText());assertThat(nextPage.get("hayMas").asBoolean()).isFalse();
+        var result=mvc.perform(get("/api/admin/usuarios?rol=ADMINISTRADOR&estadoCuenta=ACTIVA").header("Authorization",bearer()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.elementos.length()").value(1)).andExpect(jsonPath("$.elementos[0].documentoEnmascarado").value("****5678")).andReturn();
+        assertThat(result.getResponse().getContentAsString()).doesNotContain("12345678","87654321","\"documento\":");
+    }
+    @Test void accountSuspensionReactivationAndSelfProtectionAreAudited() throws Exception {
+        prepararReporte();admin(id);UUID other=otroCiudadano();
+        String path="/api/admin/usuarios/"+other+"/estado";
+        mvc.perform(patch(path).header("Authorization",bearer()).contentType("application/json").content(cambio("ACTIVA","SUSPENDIDA","Revisión interna"))).andExpect(status().isOk());
+        mvc.perform(get("/api/usuarios/me").header("Authorization","Bearer "+other)).andExpect(status().isForbidden());
+        mvc.perform(patch(path).header("Authorization",bearer()).contentType("application/json").content(cambio("ACTIVA","SUSPENDIDA","Revisión interna"))).andExpect(status().isConflict());
+        mvc.perform(patch(path).header("Authorization",bearer()).contentType("application/json").content(cambio("SUSPENDIDA","ACTIVA","Revisión finalizada"))).andExpect(status().isOk());
+        mvc.perform(get("/api/usuarios/me").header("Authorization","Bearer "+other)).andExpect(status().isOk());
+        mvc.perform(patch("/api/admin/usuarios/"+id+"/estado").header("Authorization",bearer()).contentType("application/json").content(cambio("ACTIVA","SUSPENDIDA","Prueba"))).andExpect(status().isConflict());
+        assertThat(count("auditoria")).isEqualTo(2);
+    }
+    @Test void adminValidationAndRoleRevocationAreEnforced() throws Exception {
+        prepararReporte();admin(id);
+        mvc.perform(patchAdmin(99999,"RECIBIDO","EN_EVALUACION",null)).andExpect(status().isNotFound());
+        mvc.perform(patch("/api/admin/reportes/1/estado").header("Authorization",bearer()).contentType("application/json").content("{\"nuevoEstado\":\"EN_EVALUACION\"}")).andExpect(status().isBadRequest());
+        mvc.perform(patch("/api/admin/reportes/1/estado").header("Authorization",bearer()).contentType("application/json").content("{\"estadoEsperado\":\"RECIBIDO\",\"nuevoEstado\":\"EN_EVALUACION\",\"actorId\":\"fake\"}")).andExpect(status().isBadRequest());
+        for(String query:List.of("limite=0","limite=101","cursor=no-uuid","rol=FAKE","distritoId=-1","admin=true","limite=1&limite=2"))
+            mvc.perform(get("/api/admin/usuarios?"+query).header("Authorization",bearer())).andExpect(status().isBadRequest());
+        jdbc.update("DELETE FROM accesible.usuario_roles WHERE usuario_id=? AND rol_id=(SELECT id FROM accesible.roles WHERE codigo='ADMINISTRADOR')",id);
+        mvc.perform(get("/api/admin/reportes").header("Authorization",bearer())).andExpect(status().isForbidden());
+    }
+    @Test void concurrentAdministratorsCannotSuspendEachOtherAndLeaveNoActiveAdmin() throws Exception {
+        prepararReporte();admin(id);UUID other=otroCiudadano();admin(other);
+        var pool=Executors.newFixedThreadPool(2);var start=new CountDownLatch(1);
+        try {
+            var a=pool.submit(()->{start.await();return mvc.perform(patch("/api/admin/usuarios/"+other+"/estado").header("Authorization",bearer()).contentType("application/json").content(cambio("ACTIVA","SUSPENDIDA","Prueba simultánea"))).andReturn().getResponse().getStatus();});
+            var b=pool.submit(()->{start.await();return mvc.perform(patch("/api/admin/usuarios/"+id+"/estado").header("Authorization","Bearer "+other).contentType("application/json").content(cambio("ACTIVA","SUSPENDIDA","Prueba simultánea"))).andReturn().getResponse().getStatus();});
+            start.countDown();assertThat(List.of(a.get(15,TimeUnit.SECONDS),b.get(15,TimeUnit.SECONDS))).containsExactlyInAnyOrder(200,403);
+        } finally {pool.shutdownNow();}
+        assertThat(count("auditoria")).isEqualTo(1);
+    }
+    @Test void administrativeWritesWorkWithRestrictedRuntimeAndContextDoesNotLeak() throws Exception {
+        prepararReporte();admin(id);UUID other=otroCiudadano();long report=filaListado(other,1,"2026-10-23T05:00:00Z","RECIBIDO","ALTA",1,1);
+        jdbc.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='admin_runtime_test') THEN CREATE ROLE admin_runtime_test LOGIN NOSUPERUSER NOBYPASSRLS; END IF; END $$");
+        executeScript(script("configure-runtime-role.sql").replace(":'runtime_role'","'admin_runtime_test'").replace(":\"runtime_role\"","\"admin_runtime_test\""));
+        var tx=new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        tx.execute(status->{jdbc.execute("SET LOCAL ROLE admin_runtime_test");
+            assertThat(jdbc.queryForObject("SELECT current_setting('app.actor_id',true)",String.class)).isNullOrEmpty();
+            administracion.cambiarEstadoReporte(report,new TransicionReporte(EstadoReporte.RECIBIDO,EstadoReporte.EN_EVALUACION,null),id);return null;});
+        tx.execute(status->{jdbc.execute("SET LOCAL ROLE admin_runtime_test");
+            assertThat(jdbc.queryForObject("SELECT current_setting('app.actor_id',true)",String.class)).isNullOrEmpty();
+            administracion.cambiarEstadoUsuario(other,new CambioEstadoCuenta(EstadoCuenta.ACTIVA,EstadoCuenta.SUSPENDIDA,"Prueba"),id);return null;});
+        tx.execute(status->{jdbc.execute("SET LOCAL ROLE admin_runtime_test");
+            administracion.cambiarEstadoUsuario(other,new CambioEstadoCuenta(EstadoCuenta.SUSPENDIDA,EstadoCuenta.ACTIVA,"Restauración"),id);return null;});
+        tx.execute(status->{jdbc.execute("SET LOCAL ROLE admin_runtime_test");
+            jdbc.queryForObject("SELECT set_config('app.actor_id',?,true)",String.class,other.toString());
+            assertThat(jdbc.update("UPDATE accesible.reportes SET estado='EN_PROCESO' WHERE id=?",report)).isZero();return null;});
+        assertThat(count("historial_estados")).isEqualTo(1);assertThat(count("auditoria")).isEqualTo(3);
+    }
+    @Test void accountAuditFailureRollsBackAndInvalidReasonIsRejected() throws Exception {
+        prepararReporte();admin(id);UUID other=otroCiudadano();String path="/api/admin/usuarios/"+other+"/estado";
+        mvc.perform(patch(path).header("Authorization",bearer()).contentType("application/json").content(cambio("ACTIVA","SUSPENDIDA"," "))).andExpect(status().isUnprocessableEntity());
+        jdbc.execute("ALTER TABLE accesible.auditoria ADD CONSTRAINT test_account_audit_failure CHECK (accion<>'CAMBIAR_ESTADO_USUARIO')");
+        try {mvc.perform(patch(path).header("Authorization",bearer()).contentType("application/json").content(cambio("ACTIVA","SUSPENDIDA","Prueba"))).andExpect(status().isConflict());}
+        finally {jdbc.execute("ALTER TABLE accesible.auditoria DROP CONSTRAINT test_account_audit_failure");}
+        assertThat(jdbc.queryForObject("SELECT estado_cuenta FROM accesible.usuarios WHERE id=?",String.class,other)).isEqualTo("ACTIVA");
+        assertThat(count("auditoria")).isZero();
+        mvc.perform(patch("/api/admin/usuarios/"+UUID.randomUUID()+"/estado").header("Authorization",bearer()).contentType("application/json").content(cambio("ACTIVA","SUSPENDIDA","Prueba"))).andExpect(status().isNotFound());
     }
     @Test void ownerCanReadInitialHistoryWithoutPrivateActorOrPhotoData() throws Exception {
         prepararReporte();long report=crearReporte();
