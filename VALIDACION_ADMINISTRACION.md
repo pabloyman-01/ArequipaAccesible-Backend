@@ -51,7 +51,9 @@ Cobertura relevante:
 
 El backend arrancó con el rol runtime real después de configurar las políticas. Un script Node con fetch y aserciones, enviado por stdin (`node --input-type=module`), comprobó GET /api/admin/reportes y GET /api/admin/usuarios sin token: ambos 401. Salud: 200, UP. Evidencia local ignorada por Git: `.local/admin-real-proof.json`.
 
-Antes de este bloque había cero administradores activos. La nominación de la cuenta personal como ADMINISTRADOR se solicitó expresamente porque amplía el acceso a todos los reportes y a la gestión de cuentas. No se concede ese rol sin respuesta afirmativa. La prueba administrativa positiva en Supabase real queda pendiente de esa nominación y de una sesión válida; los flujos completos administrativos sí pasaron con PostgreSQL real desechable y las políticas runtime.
+Antes de este bloque había cero administradores activos. El titular autorizó expresamente la concesión de ADMINISTRADOR a su cuenta confirmada. Se aplicó en una transacción la lógica de `ops/provision-admin.sql`, resolviendo la cuenta por su correo confirmado y usando al titular como actor y destinatario de la concesión inicial. Se conservó CIUDADANO y se verificó exactamente un evento OTORGAR_ADMINISTRADOR. La operación es idempotente y no publica datos personales ni credenciales en este registro.
+
+La prueba administrativa positiva en Supabase real queda pendiente de renovar la sesión caducada; se solicitó un enlace nuevo mediante `node ops/activation-auth.mjs`. Los flujos completos administrativos sí pasaron con PostgreSQL real desechable y las políticas runtime.
 
 No se cambiaron estados de reportes/cuentas reales como parte de las pruebas realizadas hasta aquí.
 
