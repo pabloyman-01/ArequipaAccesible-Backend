@@ -243,6 +243,16 @@ Suspender una cuenta afecta a su siguiente petición sin renovar JWT. No se perm
 
 No hay tablas ni columnas nuevas: Flyway permanece en V4. Los permisos y políticas se gestionan con el script operativo idempotente, que debe ejecutar el propietario de la base tras revisar el cambio. Las pruebas aplican el mismo script a un rol restringido en PostgreSQL desechable. Conceder ADMINISTRADOR a una cuenta real requiere que el propietario identifique expresamente al responsable.
 
-Siguiente iteración: indicadores reales del dashboard y filtros temporales. Cuadrillas, asignaciones e integraciones oficiales siguen fuera de este bloque.
+### Indicadores del dashboard
+
+`GET /api/admin/dashboard/resumen` requiere ADMINISTRADOR activo. Acepta únicamente `desde`, `hasta` (fechas ISO inclusivas en America/Lima, años 2000..9999) y `distritoId` positivo. Son opcionales y se combinan con AND; las fechas corresponden a **fecha de creación del reporte**, y el distrito al del reporte, no al del ciudadano. Parámetros desconocidos, duplicados, vacíos, fechas imposibles/rangos invertidos y formatos inválidos devuelven 400. Un distrito sin coincidencias devuelve un resumen vacío, no 404.
+
+Devuelve `filtros`, `total`, `pendientes`, `atendidos`, `rechazados`, `porEstado`, `porSeveridadDeclarada`, `porTipoBarrera` y `porDistrito`. Pendientes suma RECIBIDO, EN_EVALUACION, ASIGNADO y EN_PROCESO. Los estados representan la situación actual de los reportes creados en el período; no reconstruyen su estado histórico al cierre del período ni cuentan transiciones. No se interpreta RECHAZADO como atendido.
+
+`porEstado` contiene los seis estados y `porSeveridadDeclarada` las tres severidades, incluso con conteo cero. Los dos desgloses de catálogo contienen `{id,nombre,cantidad}`, ordenados por id; solo incluyen categorías/distritos con reportes coincidentes, aunque su catálogo esté inactivo. Sin resultados, los totales son cero y los desgloses de catálogo son `[]`. La respuesta lleva `Cache-Control: no-store` y no incluye documentos, propietarios, direcciones ni fotos.
+
+Se ejecuta una sola sentencia PostgreSQL con GROUPING SETS y parámetros vinculados para todos los conteos; todos proceden de la misma instantánea de lectura. No se cargan entidades por reporte ni se consulta historial, fotos o Storage. Se reutilizan SELECT y RLS del rol runtime: no se añaden tablas, migraciones, vistas ni permisos; Flyway sigue en V4. El índice existente de distrito admite ese filtro; el total global exacto requiere recorrer los reportes y debe medirse con volúmenes de producción antes de introducir índices o resúmenes precalculados. Los registros técnicos también cuentan y deben distinguirse al interpretar el piloto.
+
+Los datos usados por este endpoint son reales. Cuadrillas, asignaciones, notificaciones, exportaciones e integraciones oficiales siguen pendientes.
 
 Referencias: [JWT Supabase](https://supabase.com/docs/guides/auth/jwts), [Resource Server Spring Security 6.5](https://docs.spring.io/spring-security/reference/6.5/servlet/oauth2/resource-server/jwt.html). El [cambio TLS de Supabase](https://supabase.com/changelog/cbc-tls-ciphers-deprecated) requiere clientes modernos; se usa HTTPS de Java 21.

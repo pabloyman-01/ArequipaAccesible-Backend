@@ -85,6 +85,14 @@ Content-Type: application/json
 GET {{baseUrl}}/api/admin/usuarios?limite=20&estadoCuenta=ACTIVA
 Authorization: Bearer {{token}}
 
+### Dashboard: aggregates for reports created during the inclusive local date range
+GET {{baseUrl}}/api/admin/dashboard/resumen?desde=2026-10-01&hasta=2026-10-31&distritoId=1
+Authorization: Bearer {{token}}
+
+### Dashboard: all reports, no personal data or photos
+GET {{baseUrl}}/api/admin/dashboard/resumen
+Authorization: Bearer {{token}}
+
 ### Account state: replace UUID with an actual user from the directory; never suspend yourself
 PATCH {{baseUrl}}/api/admin/usuarios/REEMPLAZAR_UUID/estado
 Authorization: Bearer {{token}}

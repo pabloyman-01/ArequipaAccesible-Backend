@@ -79,6 +79,7 @@ class PostgresIntegrationTest {
     @MockitoBean ArchivoStoragePort storage;
     @Autowired ReporteRepositoryPort reportes;
     @Autowired AdministracionRepositoryPort administracion;
+    @Autowired DashboardRepositoryPort dashboard;
     @Autowired LimpiezaArchivos limpieza;
     @Autowired ObjectMapper json;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
@@ -100,6 +101,106 @@ class PostgresIntegrationTest {
         {"nombres":"Ana","apellidos":"Perez","tipoDocumento":"DNI","documento":"%s"}
         """.formatted(documento); }
     UsuarioPerfil registrar() { return perfiles.registrar(id,id+"@example.test",new DatosPerfil("Ana","Perez","DNI","12345678",null,null)); }
+    @Test void dashboardEmptyHasZeroForEveryStateAndSeverity() throws Exception {
+        prepararReporte();admin(id);
+        var result=listado(get("/api/admin/dashboard/resumen"));
+        assertThat(result.get("total").asLong()).isZero();
+        assertThat(result.get("pendientes").asLong()).isZero();
+        assertThat(result.get("atendidos").asLong()).isZero();
+        assertThat(result.get("rechazados").asLong()).isZero();
+        assertThat(result.get("porEstado").size()).isEqualTo(6);
+        result.get("porEstado").forEach(value->assertThat(value.asLong()).isZero());
+        assertThat(result.get("porSeveridadDeclarada").size()).isEqualTo(3);
+        result.get("porSeveridadDeclarada").forEach(value->assertThat(value.asLong()).isZero());
+        assertThat(result.get("porTipoBarrera").isEmpty()).isTrue();
+        assertThat(result.get("porDistrito").isEmpty()).isTrue();
+        verifyNoInteractions(storage);
+    }
+    @Test void dashboardAggregatesAllOwnersWithoutMultiplyingHistoryOrPhotos() throws Exception {
+        prepararReporte();admin(id);UUID other=otroCiudadano();
+        for(int i=0;i<EstadoReporte.values().length;i++) {
+            long report=filaListado(i%2==0?id:other,i+1,"2026-10-23T05:00:00Z",EstadoReporte.values()[i].name(),Severidad.values()[i%3].name(),1,1);
+            for(int j=0;j<2;j++)jdbc.update("INSERT INTO accesible.historial_estados(reporte_id,estado_nuevo,actor_id,fecha_cambio) VALUES (?,'RECIBIDO',?,now())",report,id);
+            for(int j=0;j<2;j++)jdbc.update("INSERT INTO accesible.reporte_fotos(reporte_id,object_key,mime_type,tamano_bytes,creado_en) VALUES (?,?,'image/png',20,now())",report,"test/"+report+"/"+j);
+        }
+        var result=listado(get("/api/admin/dashboard/resumen"));
+        assertThat(result.get("total").asLong()).isEqualTo(6);
+        assertThat(result.get("pendientes").asLong()).isEqualTo(4);
+        assertThat(result.get("atendidos").asLong()).isEqualTo(1);
+        assertThat(result.get("rechazados").asLong()).isEqualTo(1);
+        result.get("porEstado").forEach(value->assertThat(value.asLong()).isEqualTo(1));
+        result.get("porSeveridadDeclarada").forEach(value->assertThat(value.asLong()).isEqualTo(2));
+        assertThat(result.at("/porTipoBarrera/0/cantidad").asLong()).isEqualTo(6);
+        assertThat(result.at("/porDistrito/0/cantidad").asLong()).isEqualTo(6);
+        assertThat(result.toString()).doesNotContain("ciudadanoId","documento","email","descripcion","direccion","object_key");
+        assertThat(count("auditoria")).isZero();verifyNoInteractions(storage);
+    }
+    @Test void dashboardCombinesCreationDatesAndReportDistrictIncludingInactiveCatalogs() throws Exception {
+        prepararReporte();admin(id);
+        jdbc.update("INSERT INTO accesible.distritos(nombre) VALUES ('Segundo distrito de prueba')");
+        jdbc.update("INSERT INTO accesible.tipos_barrera(codigo,nombre) VALUES ('TEST-02','Segundo tipo de prueba')");
+        filaListado(id,1,"2026-10-23T04:59:59.999999Z","ATENDIDO","BAJA",1,1);
+        filaListado(id,2,"2026-10-23T05:00:00Z","RECIBIDO","ALTA",2,2);
+        filaListado(id,3,"2026-10-24T04:59:59.999999Z","RECHAZADO","MEDIA",2,2);
+        filaListado(id,4,"2026-10-24T05:00:00Z","EN_PROCESO","ALTA",2,2);
+        filaListado(id,5,"2026-10-23T12:00:00Z","ATENDIDO","BAJA",1,1);
+        jdbc.update("UPDATE accesible.reportes SET fecha_actualizacion='2026-12-01T05:00:00Z'");
+        jdbc.update("UPDATE accesible.distritos SET activo=false WHERE id=2");
+        jdbc.update("UPDATE accesible.tipos_barrera SET activo=false WHERE id=2");
+        var result=listado(get("/api/admin/dashboard/resumen?desde=2026-10-23&hasta=2026-10-23&distritoId=2"));
+        assertThat(result.get("total").asLong()).isEqualTo(2);
+        assertThat(result.get("pendientes").asLong()).isEqualTo(1);
+        assertThat(result.get("rechazados").asLong()).isEqualTo(1);
+        assertThat(result.at("/porEstado/RECIBIDO").asLong()).isEqualTo(1);
+        assertThat(result.at("/porEstado/RECHAZADO").asLong()).isEqualTo(1);
+        assertThat(result.at("/porDistrito/0/id").asLong()).isEqualTo(2);
+        assertThat(result.at("/porTipoBarrera/0/nombre").asText()).isEqualTo("Segundo tipo de prueba");
+        assertThat(result.at("/filtros/desde").asText()).isEqualTo("2026-10-23");
+        assertThat(listado(get("/api/admin/dashboard/resumen?desde=2026-10-24")).get("total").asLong()).isEqualTo(1);
+        assertThat(listado(get("/api/admin/dashboard/resumen?hasta=2026-10-22")).get("total").asLong()).isEqualTo(1);
+        assertThat(listado(get("/api/admin/dashboard/resumen?distritoId=999")).get("total").asLong()).isZero();
+        assertThat(listado(get("/api/admin/dashboard/resumen?desde=2027-01-01")).get("total").asLong()).isZero();
+    }
+    @Test void dashboardRejectsInvalidUnknownEmptyOrDuplicateFilters() throws Exception {
+        prepararReporte();admin(id);
+        for(String query:List.of("distritoId=0","distritoId=-1","distritoId=abc","distritoId=9223372036854775808",
+                "desde=1999-12-31","hasta=+10000-01-01","desde=no-fecha","desde=2026-02-30",
+                "desde=2026-10-24&hasta=2026-10-23","desde=","hasta=","distritoId=",
+                "desde=2026-10-23&desde=2026-10-24","distritoId=1&distritoId=2","estado=RECIBIDO","ciudadanoId="+id,"limite=1"))
+            mvc.perform(get("/api/admin/dashboard/resumen?"+query).header("Authorization",bearer())).andExpect(status().isBadRequest());
+    }
+    @Test void dashboardRequiresActiveAdminAndReflectsRoleRevocationImmediately() throws Exception {
+        prepararReporte();String path="/api/admin/dashboard/resumen";
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        mvc.perform(get(path).header("Authorization",bearer())).andExpect(status().isForbidden());
+        admin(id);listado(get(path));
+        jdbc.update("DELETE FROM accesible.usuario_roles WHERE usuario_id=? AND rol_id=(SELECT id FROM accesible.roles WHERE codigo='ADMINISTRADOR')",id);
+        mvc.perform(get(path).header("Authorization",bearer())).andExpect(status().isForbidden());
+        admin(id);jdbc.update("UPDATE accesible.usuarios SET estado_cuenta='SUSPENDIDA' WHERE id=?",id);
+        mvc.perform(get(path).header("Authorization",bearer())).andExpect(status().isForbidden());
+    }
+    @Test void dashboardReflectsAdministrativeTransitionWithoutWritingAnyExtraEvents() throws Exception {
+        prepararReporte();admin(id);long report=filaListado(id,1,"2026-10-23T05:00:00Z","EN_PROCESO","ALTA",1,1);
+        assertThat(listado(get("/api/admin/dashboard/resumen")).get("pendientes").asLong()).isEqualTo(1);
+        mvc.perform(patchAdmin(report,"EN_PROCESO","ATENDIDO","Resuelto en prueba desechable")).andExpect(status().isOk());
+        var result=listado(get("/api/admin/dashboard/resumen"));
+        assertThat(result.get("total").asLong()).isEqualTo(1);
+        assertThat(result.get("pendientes").asLong()).isZero();
+        assertThat(result.get("atendidos").asLong()).isEqualTo(1);
+        assertThat(count("auditoria")).isEqualTo(1);assertThat(count("historial_estados")).isEqualTo(1);
+        verifyNoInteractions(storage);
+    }
+    @Test void dashboardWorksWithExistingRestrictedRuntimePermissions() throws Exception {
+        prepararReporte();admin(id);filaListado(id,1,"2026-10-23T05:00:00Z","RECIBIDO","ALTA",1,1);
+        jdbc.execute("DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='dashboard_runtime_test') THEN CREATE ROLE dashboard_runtime_test LOGIN NOSUPERUSER NOBYPASSRLS; END IF; END $$");
+        executeScript(script("configure-runtime-role.sql").replace(":'runtime_role'","'dashboard_runtime_test'").replace(":\"runtime_role\"","\"dashboard_runtime_test\""));
+        var tx=new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        tx.execute(status->{jdbc.execute("SET LOCAL ROLE dashboard_runtime_test");
+            var result=dashboard.resumir(new ConsultaDashboard(null,null,1L));
+            assertThat(result.total()).isEqualTo(1);assertThat(result.porEstado().get(EstadoReporte.RECIBIDO)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname=current_user",Boolean.class)).isFalse();
+            return null;});
+    }
     @Test void migrationsValidAndAuthFkPresent() {
         flyway.validate();
         assertThat(Arrays.stream(flyway.info().applied()).filter(m -> m.getVersion() != null)).hasSize(4);
