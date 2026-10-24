@@ -256,3 +256,7 @@ Se ejecuta una sola sentencia PostgreSQL con GROUPING SETS y parámetros vincula
 Los datos usados por este endpoint son reales. Cuadrillas, asignaciones, notificaciones, exportaciones e integraciones oficiales siguen pendientes.
 
 Referencias: [JWT Supabase](https://supabase.com/docs/guides/auth/jwts), [Resource Server Spring Security 6.5](https://docs.spring.io/spring-security/reference/6.5/servlet/oauth2/resource-server/jwt.html). El [cambio TLS de Supabase](https://supabase.com/changelog/cbc-tls-ciphers-deprecated) requiere clientes modernos; se usa HTTPS de Java 21.
+
+### Frontend Angular conectado
+
+El frontend se trabaja en `D:\code\Arequipaaccesiblefront`, rama `feat/integracion-frontend`, y usa http://localhost:3000 con proxy /api hacia este backend en 8080. Configurar el origen explícito en CORS; la URL y la clave publicable de Supabase se configuran en el frontend, nunca los secretos del servidor. Ver [VALIDACION_INTEGRACION.md](VALIDACION_INTEGRACION.md) y el registro INTEGRACION.md del frontend para pruebas y pendientes.

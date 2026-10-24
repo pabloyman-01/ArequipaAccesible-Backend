@@ -39,6 +39,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /** Dedicated disposable PostgreSQL only; never use an existing application database. */
 @SpringBootTest(properties={"app.require-https=false","app.jwt.issuer=https://identity.example.test/auth/v1",
+        "app.cors-origins=http://localhost:3000",
         "app.jwt.jwks-uri=https://identity.example.test/auth/v1/.well-known/jwks.json",
         "app.reportes.habilitado=true","app.reportes.lat-min=-17","app.reportes.lat-max=-16",
         "app.reportes.lon-min=-72","app.reportes.lon-max=-71","app.reportes.limpieza-ms=3600000"})
@@ -205,6 +206,15 @@ class PostgresIntegrationTest {
         flyway.validate();
         assertThat(Arrays.stream(flyway.info().applied()).filter(m -> m.getVersion() != null)).hasSize(4);
         assertThat(jdbc.queryForObject("SELECT count(*) FROM pg_constraint WHERE conname='usuarios_auth_fk'",Integer.class)).isEqualTo(1);
+    }
+    @Test void frontendCorsAllowsOnlyConfiguredOriginAndAuthorizationHeader() throws Exception {
+        mvc.perform(options("/api/reportes").header("Origin","http://localhost:3000")
+                .header("Access-Control-Request-Method","POST").header("Access-Control-Request-Headers","authorization,content-type"))
+                .andExpect(status().isOk()).andExpect(header().string("Access-Control-Allow-Origin","http://localhost:3000"))
+                .andExpect(header().doesNotExist("Access-Control-Allow-Credentials"));
+        mvc.perform(options("/api/reportes").header("Origin","https://untrusted.example.test")
+                .header("Access-Control-Request-Method","POST"))
+                .andExpect(status().isForbidden()).andExpect(header().doesNotExist("Access-Control-Allow-Origin"));
     }
     @Test void healthIsPublic() throws Exception {
         mvc.perform(get("/actuator/health")).andExpect(status().isOk()).andExpect(jsonPath("$.status").value("UP"))
