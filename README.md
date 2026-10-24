@@ -16,6 +16,10 @@ HU-01 añade registro y detalle de reportes, fotos privadas, historial inicial, 
 
 Proyecto Supabase creado por autorización del usuario: [ArequipaAccesible-Backend](https://supabase.com/dashboard/project/kjqzklzswocxbtbqohsc), São Paulo. Se provisionaron 12 tablas privadas, FK de identidad, bucket privado y rol `arequipa_backend` con RLS. Sus credenciales no están en el repositorio. Ver la adopción de Flyway y configuración de HU-01 al final.
 
+## Conectarse a la base compartida
+
+Para ejecutar el backend desde otro equipo con el Supabase existente, seguir [BASE_COMPARTIDA.md](BASE_COMPARTIDA.md). Incluye requisitos, variables, certificado TLS, arranque y comprobaciones. No requiere invitación al panel; el responsable entrega las credenciales por un canal seguro. Usar `SPRING_FLYWAY_ENABLED=false`, porque la base ya está migrada.
+
 ## Estructura
 
 ```text
