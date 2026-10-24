@@ -1,0 +1,101 @@
+@baseUrl = http://localhost:8080
+# Set token in your HTTP client's secret store; never commit a real token.
+@token = REEMPLAZAR_LOCALMENTE
+
+### Public healthcheck
+GET {{baseUrl}}/actuator/health
+
+### Profile creation after Supabase Auth signup/login; fictitious example data
+PUT {{baseUrl}}/api/usuarios/me
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"nombres":"Ejemplo","apellidos":"Prueba","tipoDocumento":"DNI","documento":"00000000"}
+
+### Own profile (masked document)
+GET {{baseUrl}}/api/usuarios/me
+Authorization: Bearer {{token}}
+
+### Patch permitted fields; null/omitted fields remain unchanged
+PATCH {{baseUrl}}/api/usuarios/me
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"telefono":"+51900000000"}
+
+### Public active catalogues: IDs below must come from these endpoints
+GET {{baseUrl}}/api/catalogos/distritos
+
+### Active barrier types
+GET {{baseUrl}}/api/catalogos/tipos-barrera
+
+### Create report; fictitious text/location, replace catalogue IDs and local photo path
+POST {{baseUrl}}/api/reportes
+Authorization: Bearer {{token}}
+Content-Type: multipart/form-data; boundary=hu01
+
+--hu01
+Content-Disposition: form-data; name="datos"
+Content-Type: application/json
+
+{"tipoBarreraId":1,"severidadDeclarada":"ALTA","descripcion":"Rampa rota de prueba","distritoId":1,"direccionReferencia":"Dirección ficticia","latitud":-16.3989,"longitud":-71.5350}
+--hu01
+Content-Disposition: form-data; name="foto"; filename="evidencia.png"
+Content-Type: image/png
+
+< ./evidencia-local.png
+--hu01--
+
+### Report detail: replace ID with the 201 response
+GET {{baseUrl}}/api/reportes/1
+Authorization: Bearer {{token}}
+
+### Own reports: newest first; date boundaries are inclusive in America/Lima
+GET {{baseUrl}}/api/reportes?limite=20&estado=RECIBIDO&severidadDeclarada=ALTA&desde=2026-10-01&hasta=2026-10-31
+Authorization: Bearer {{token}}
+
+### Own report by exact code; no results if it belongs to another citizen
+GET {{baseUrl}}/api/reportes?codigo=ARQ-2026-000001
+Authorization: Bearer {{token}}
+
+### Next page: replace cursor with siguienteCursor; keep the same filters
+GET {{baseUrl}}/api/reportes?limite=20&cursor=PEGAR_CURSOR_DE_RESPUESTA
+Authorization: Bearer {{token}}
+
+### Private evidence: use the link from detail
+GET {{baseUrl}}/api/reportes/1/fotos/1
+Authorization: Bearer {{token}}
+
+### Chronological report history: owner or administrator; same 404 for foreign/missing reports
+GET {{baseUrl}}/api/reportes/1/historial
+Authorization: Bearer {{token}}
+
+### Administrative global collection; requires a real provisioned administrator
+GET {{baseUrl}}/api/admin/reportes?limite=20&estado=RECIBIDO
+Authorization: Bearer {{token}}
+
+### Start evaluation; reload current state before retrying after 409
+PATCH {{baseUrl}}/api/admin/reportes/1/estado
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"estadoEsperado":"RECIBIDO","nuevoEstado":"EN_EVALUACION","motivo":"Inicio de revisión del reporte"}
+
+### Admin user directory; masked document
+GET {{baseUrl}}/api/admin/usuarios?limite=20&estadoCuenta=ACTIVA
+Authorization: Bearer {{token}}
+
+### Dashboard: aggregates for reports created during the inclusive local date range
+GET {{baseUrl}}/api/admin/dashboard/resumen?desde=2026-10-01&hasta=2026-10-31&distritoId=1
+Authorization: Bearer {{token}}
+
+### Dashboard: all reports, no personal data or photos
+GET {{baseUrl}}/api/admin/dashboard/resumen
+Authorization: Bearer {{token}}
+
+### Account state: replace UUID with an actual user from the directory; never suspend yourself
+PATCH {{baseUrl}}/api/admin/usuarios/REEMPLAZAR_UUID/estado
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{"estadoEsperado":"ACTIVA","nuevoEstado":"SUSPENDIDA","motivo":"Revisión interna autorizada por el responsable"}

@@ -1,0 +1,60 @@
+spring:
+  application:
+    name: arequipa-accesible
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate.default_schema: accesible
+  flyway:
+    default-schema: accesible
+    schemas: accesible
+    locations: classpath:db/migration
+    clean-disabled: true
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+  servlet.multipart:
+    max-file-size: 5MB
+    max-request-size: 6MB
+server:
+  port: ${PORT:8080}
+  forward-headers-strategy: none
+  error:
+    include-message: never
+    include-stacktrace: never
+management:
+  endpoints.web.exposure.include: health
+  endpoint.health.show-details: never
+logging:
+  structured.format.console: ecs
+  level:
+    org.hibernate.engine.jdbc.spi.SqlExceptionHelper: OFF
+    org.hibernate.SQL: OFF
+    org.hibernate.orm.jdbc.bind: OFF
+springdoc:
+  api-docs.enabled: ${OPENAPI_ENABLED:false}
+  swagger-ui.enabled: ${OPENAPI_ENABLED:false}
+app:
+  jwt:
+    issuer: ${SUPABASE_JWT_ISSUER}
+    jwks-uri: ${SUPABASE_JWKS_URI}
+    audience: ${SUPABASE_JWT_AUDIENCE:authenticated}
+  cors-origins: ${CORS_ALLOWED_ORIGINS:}
+  require-https: ${REQUIRE_HTTPS:true}
+  reportes:
+    habilitado: ${REPORTES_HABILITADO:false}
+    limite-por-minuto: ${REPORTES_LIMITE_POR_MINUTO:5}
+    lat-min: ${REPORTES_LAT_MIN:}
+    lat-max: ${REPORTES_LAT_MAX:}
+    lon-min: ${REPORTES_LON_MIN:}
+    lon-max: ${REPORTES_LON_MAX:}
+  storage:
+    url: ${SUPABASE_URL:}
+    bucket: ${SUPABASE_STORAGE_BUCKET:reportes-evidencias}
+    secret: ${SUPABASE_STORAGE_SECRET_KEY:}
