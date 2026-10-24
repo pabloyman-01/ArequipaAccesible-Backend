@@ -45,5 +45,9 @@
   "realAdministrativeHttpVerified": true,
   "realAdministrativeHttpVerifiedOn": "2026-10-23",
   "realDashboardHttpVerified": true,
-  "realDashboardHttpVerifiedOn": "2026-10-23"
+  "realDashboardHttpVerifiedOn": "2026-10-23",
+  "signupEmailConfirmationRequired": false,
+  "signupEmailConfirmationTemporaryPilotException": true,
+  "signupEnabled": true,
+  "signupAuthSettingsVerifiedOn": "2026-10-24"
 }
